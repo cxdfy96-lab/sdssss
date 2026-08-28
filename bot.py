@@ -34,16 +34,15 @@ async def cache_channel_media():
     except Exception as e:
         print(f"خطأ أثناء جلب ملفات القناة: {e}")
 
-async def download_cover_image():
+async def get_cover():
     import urllib.request
     cover_path = "cover.jpg"
-    try:
-        urllib.request.urlretrieve(COVER_IMAGE_URL, cover_path)
-        if os.path.exists(cover_path):
-            return cover_path
-    except Exception:
-        pass
-    return None
+    if not os.path.exists(cover_path):
+        try:
+            urllib.request.urlretrieve(COVER_IMAGE_URL, cover_path)
+        except Exception:
+            pass
+    return cover_path if os.path.exists(cover_path) else None
 
 @client.on(events.NewMessage(outgoing=True, incoming=True))
 async def handle_all_messages(event):
@@ -54,7 +53,7 @@ async def handle_all_messages(event):
     text_lower = text_raw.lower()
     target_chat = event.chat_id
 
-    # 1. حالة كلمة "غنيلي" (جلب سريع جداً من القناة)
+    # 1. الحالة الأولى: "غنيلي" (سرعة فائقة جداً من القناة)
     if text_raw == "غنيلي":
         try:
             await event.delete()
@@ -67,6 +66,7 @@ async def handle_all_messages(event):
 
         selected_msg = random.choice(channel_media_messages)
 
+        # إذا كان فويس، يُرسل فوراً وبدون أي تعديل
         if selected_msg.voice:
             try:
                 await client.send_file(target_chat, selected_msg.media, caption="")
@@ -74,36 +74,29 @@ async def handle_all_messages(event):
                 await client.forward_messages(target_chat, selected_msg)
             return
 
-        cover_path = await download_cover_image()
+        # إذا كان ملف صوتي، نرسله فوراً مع حقن الغلاف واسم النقطة ويوزر الفنان
+        cover_path = await get_cover()
         try:
-            file_path = await client.download_media(selected_msg)
-            
             await client.send_file(
                 target_chat,
-                file_path,
+                selected_msg.media,
                 caption="",
-                thumb=cover_path if cover_path and os.path.exists(cover_path) else None,
+                thumb=cover_path,
                 attributes=[
                     DocumentAttributeAudio(
-                        duration=0,
+                        duration=selected_msg.audio.duration if selected_msg.audio and selected_msg.audio.duration else 0,
                         title=".",
                         performer="@toe7e",
                         voice=False
                     )
                 ]
             )
-            
-            if file_path and os.path.exists(file_path):
-                os.remove(file_path)
         except Exception as e:
             print(f"خطأ في إرسال ملف القناة: {e}")
             await client.forward_messages(target_chat, selected_msg)
-
-        if cover_path and os.path.exists(cover_path):
-            os.remove(cover_path)
         return
 
-    # 2. حالة بحث يوتيوب عبر بوت التحميل بكلمة "يوت " أو "يوتو " (بسرعة فائقة)
+    # 2. الحالة الثانية: أمر البحث "يوت " أو "يوتو " (بسرعة البرق من بوت التحميل)
     if text_lower.startswith("يوت ") or text_lower.startswith("يوتو "):
         query = text_raw[4:].strip() if text_lower.startswith("يوت ") else text_raw[5:].strip()
         if not query:
@@ -115,18 +108,18 @@ async def handle_all_messages(event):
             pass
 
         try:
-            # إرسال الطلب لبوت التحميل ومراقبة الرد الفوري
             sent_msg = await client.send_message(DOWNLOAD_BOT, f"يوت {query}")
             
             audio_msg = None
-            for _ in range(15): # تقليل وقت الانتظار للاستجابة السريعة
+            # استجابة سريعة جداً وخاطفة للرد القادم من بوت التحميل
+            for _ in range(12):
                 async for msg in client.iter_messages(DOWNLOAD_BOT, limit=3):
                     if msg.id > sent_msg.id and (msg.audio or msg.voice or (msg.document and msg.file and msg.file.mime_type and 'audio' in msg.file.mime_type)):
                         audio_msg = msg
                         break
                 if audio_msg:
                     break
-                await asyncio.sleep(0.5) # فحص سريع جداً كل نصف ثانية
+                await asyncio.sleep(0.3) # فحص فائق السرعة كل 300 جزء من الثانية
 
             if not audio_msg:
                 return
@@ -135,17 +128,17 @@ async def handle_all_messages(event):
                 await client.send_file(target_chat, audio_msg.media, caption="")
                 return
 
-            downloaded_file_path = await client.download_media(audio_msg)
-            cover_path = await download_cover_image()
+            cover_path = await get_cover()
 
+            # إرسال فوري للأغنية بالخصائص المطلوبة والصورة
             await client.send_file(
                 target_chat,
-                downloaded_file_path,
+                audio_msg.media,
                 caption="",
-                thumb=cover_path if cover_path and os.path.exists(cover_path) else None,
+                thumb=cover_path,
                 attributes=[
                     DocumentAttributeAudio(
-                        duration=0,
+                        duration=audio_msg.audio.duration if audio_msg.audio and audio_msg.audio.duration else 0,
                         title=".",
                         performer="@toe7e",
                         voice=False
@@ -153,19 +146,14 @@ async def handle_all_messages(event):
                 ]
             )
 
-            if downloaded_file_path and os.path.exists(downloaded_file_path):
-                os.remove(downloaded_file_path)
-            if cover_path and os.path.exists(cover_path):
-                os.remove(cover_path)
-
         except Exception as e:
             print(f"خطأ أثناء جلب الأغنية من بوت التحميل: {e}")
 
 async def main():
-    print("جاري تشغيل اليوزر بوت...")
+    print("جاري تشغيل اليوزر بوت بأقصى سرعة...")
     await client.start()
     await cache_channel_media()
-    print("البوت يعمل بأقصى سرعة وجاهز...")
+    print("البوت جاهز ويعمل الآن...")
     await client.run_until_disconnected()
 
 if __name__ == "__main__":
