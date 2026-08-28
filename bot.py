@@ -16,21 +16,19 @@ SESSIONS = [s.strip() for s in SESSION_STRINGS_RAW.split(",") if s.strip()]
 CHANNEL_USERNAME = "arggrw"
 DOWNLOAD_BOT = "@MsosMbot"
 
-channel_media_messages = []
+async def initialize_bot_for_client(client):
+    media_messages = []
+    print(f"[INFO] جاري تخزين رسائل القناة للسرعة الفورية...")
+    try:
+        async for message in client.iter_messages(CHANNEL_USERNAME, limit=150):
+            if message.audio or message.voice or (message.document and message.document.mime_type and 'audio' in message.document.mime_type):
+                media_messages.append(message)
+        print(f"[INFO] تم تخزين {len(media_messages)} ملفاً من القناة بنجاح.")
+    except Exception as e:
+        print(f"[ERROR] خطأ أثناء جلب ملفات القناة: {e}")
+    return media_messages
 
-async def initialize_bot(client):
-    global channel_media_messages
-    if not channel_media_messages:
-        print("[INFO] جاري تخزين رسائل القناة للسرعة الفورية...")
-        try:
-            async for message in client.iter_messages(CHANNEL_USERNAME, limit=150):
-                if message.audio or message.voice or (message.document and message.document.mime_type and 'audio' in message.document.mime_type):
-                    channel_media_messages.append(message)
-            print(f"[INFO] تم تخزين {len(channel_media_messages)} ملفاً من القناة بنجاح.")
-        except Exception as e:
-            print(f"[ERROR] خطأ أثناء جلب ملفات القناة: {e}")
-
-def setup_handlers(client):
+def setup_handlers(client, client_media_messages):
     # الاستماع للرسائل الصادرة والواردة في أي مكان (خاص، مجموعات، قنوات)
     @client.on(events.NewMessage(incoming=True, outgoing=True))
     async def handle_commands(event):
@@ -38,28 +36,28 @@ def setup_handlers(client):
         text_lower = text_raw.lower()
         target_chat = event.chat_id
 
-        # 1. أمر "غنيلي" (بدون كلمة محولة وبشكل مباشر 100%)
+        # 1. أمر "غنيلي" (سرعة صاروخية وفورية بدون أي تحميل)
         if text_raw == "غنيلي":
             try:
                 await event.delete()
             except Exception:
                 pass
 
-            if not channel_media_messages:
+            if not client_media_messages:
                 await client.send_message(target_chat, "عذراً، لم يتم العثور على ملفات صوتية في القناة حالياً.")
                 return
 
-            selected_msg = random.choice(channel_media_messages)
+            selected_msg = random.choice(client_media_messages)
 
             try:
+                # إرسال الميديا المخزنة مسبقاً مباشرة وبأقصى سرعة
                 await client.send_file(
                     target_chat,
                     selected_msg.media,
-                    caption="",
-                    attributes=selected_msg.document.attributes if selected_msg.document else None
+                    caption=""
                 )
             except Exception as e:
-                print(f"[ERROR] فشل إرسال ملف القناة مباشرة: {e}")
+                print(f"[ERROR] فشل إرسال ملف القناة: {e}")
             return
 
         # 2. أمر بحث اليوتيوب (يوت / يوتو) بسرعة البرق
@@ -102,10 +100,13 @@ def setup_handlers(client):
 
 async def start_client(session_str, index):
     client = TelegramClient(StringSession(session_str), API_ID, API_HASH)
-    setup_handlers(client)
     await client.start()
     print(f"[SUCCESS] تم تشغيل الحساب رقم {index} بنجاح!")
-    await initialize_bot(client)
+    
+    # تخزين الرسائل لهذا الحساب بشكل فوري
+    client_media_messages = await initialize_bot_for_client(client)
+    
+    setup_handlers(client, client_media_messages)
     return client
 
 async def main():
