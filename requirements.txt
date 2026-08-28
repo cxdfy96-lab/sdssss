@@ -1,1 +1,2 @@
 Telethon==1.34.0
+mutagen==1.47.0
