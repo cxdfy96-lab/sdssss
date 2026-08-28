@@ -37,7 +37,7 @@ async def handle_commands(event):
     text_lower = text_raw.lower()
     target_chat = event.chat_id
 
-    # 1. أمر "غنيلي" (سرعة فائقة جداً من القناة)
+    # 1. أمر "غنيلي" (جلب عشوائي فائق السرعة من القناة)
     if text_raw == "غنيلي":
         try:
             await event.delete()
@@ -50,6 +50,7 @@ async def handle_commands(event):
 
         selected_msg = random.choice(channel_media_messages)
 
+        # إذا كانت بصمة صوتية (Voice)، تُرسل كما هي فوراً وبدون تعديل
         if selected_msg.voice:
             try:
                 await client.send_file(target_chat, selected_msg.media, caption="")
@@ -57,6 +58,7 @@ async def handle_commands(event):
                 await client.forward_messages(target_chat, selected_msg)
             return
 
+        # إذا كان ملف صوتي (Audio)، نرسله كملف أصلي مستقل بغلافه الأصلي، مع عنوان نقطة (.) وفنان @toe7e
         try:
             await client.send_file(
                 target_chat,
@@ -65,8 +67,8 @@ async def handle_commands(event):
                 attributes=[
                     DocumentAttributeAudio(
                         duration=selected_msg.audio.duration if selected_msg.audio and selected_msg.audio.duration else 0,
-                        title=".",
-                        performer="@toe7e",
+                        title=".",          # عنوان الأغنية نقطة
+                        performer="@toe7e", # اسم الفنان اليوزر المتفق عليه
                         voice=False
                     )
                 ]
@@ -79,7 +81,7 @@ async def handle_commands(event):
                 pass
         return
 
-    # 2. أمر بحث اليوتيوب (يوت / يوتو) بسرعة البرق
+    # 2. أمر بحث اليوتيوب (يوت / يوتو) عبر بوت التحميل بسرعة البرق
     if text_lower.startswith("يوت ") or text_lower.startswith("يوتو "):
         query = text_raw[4:].strip() if text_lower.startswith("يوت ") else text_raw[5:].strip()
         if not query:
@@ -94,15 +96,15 @@ async def handle_commands(event):
             sent_msg = await client.send_message(DOWNLOAD_BOT, f"يوت {query}")
             
             audio_msg = None
-            # استجابة خاطفة وفورية بدون أي تأخير
-            for _ in range(12):
+            # استجابة خاطفة وفورية بدون أي تعليق
+            for _ in range(15):
                 async for msg in client.iter_messages(DOWNLOAD_BOT, limit=3):
                     if msg.id > sent_msg.id and (msg.audio or msg.voice or (msg.document and msg.file and msg.file.mime_type and 'audio' in msg.file.mime_type)):
                         audio_msg = msg
                         break
                 if audio_msg:
                     break
-                await asyncio.sleep(0.15) # فحص فائق السرعة كل 150 جزء من الثانية
+                await asyncio.sleep(0.1) # فحص فائق السرعة كل 100 جزء من الثانية
 
             if not audio_msg:
                 return
@@ -111,6 +113,7 @@ async def handle_commands(event):
                 await client.send_file(target_chat, audio_msg.media, caption="")
                 return
 
+            # إرسال الأغنية الواردة من بوت التحميل بغلافها الأصلي، مع عنوان نقطة (.) وفنان @toe7e
             await client.send_file(
                 target_chat,
                 audio_msg.media,
@@ -118,21 +121,21 @@ async def handle_commands(event):
                 attributes=[
                     DocumentAttributeAudio(
                         duration=audio_msg.audio.duration if audio_msg.audio and audio_msg.audio.duration else 0,
-                        title=".",
-                        performer="@toe7e",
+                        title=".",          # عنوان الأغنية نقطة
+                        performer="@toe7e", # اسم الفنان اليوزر المتفق عليه
                         voice=False
                     )
                 ]
             )
 
         except Exception as e:
-            print(f"[ERROR] خطأ أثناء جلب الأغنية من بوت التحميل: {e}")
+            print(f"[ERROR] أثناء جلب الأغنية من بوت التحميل: {e}")
 
 async def main():
-    print("[INFO] جاري تشغيل اليوزر بوت بأقصى سرعة صاروخية...")
+    print("[INFO] تشغيل اليوزر بوت بأقصى سرعة...")
     await client.start()
     await initialize_bot()
-    print("[SUCCESS] البوت يعمل الآن وبأعلى سرعة ممكنة...")
+    print("[SUCCESS] البوت يعمل بكامل الخصائص والسرعة القصوى الآن...")
     await client.run_until_disconnected()
 
 if __name__ == "__main__":
