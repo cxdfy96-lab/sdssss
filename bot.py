@@ -16,6 +16,9 @@ SESSIONS = [s.strip() for s in SESSION_STRINGS_RAW.split(",") if s.strip()]
 CHANNEL_USERNAME = "arggrw"
 DOWNLOAD_BOT = "@MsosMbot"
 
+# قاموس لتتبع آخر الأغاني المرسلة لكل دردشة لضمان عدم تكرارها مباشرة
+last_sent_messages = {}
+
 async def initialize_bot_for_client(client):
     media_messages = []
     print(f"[INFO] جاري تخزين رسائل القناة للسرعة الفورية...")
@@ -29,14 +32,14 @@ async def initialize_bot_for_client(client):
     return media_messages
 
 def setup_handlers(client, client_media_messages):
-    # الاستماع للرسائل الصادرة والواردة في أي مكان (خاص، مجموعات، قنوات)
-    @client.on(events.NewMessage(incoming=True, outgoing=True))
+    # الاستماع للرسائل في المحادثات الخاصة فقط
+    @client.on(events.NewMessage(incoming=True, outgoing=True, func=lambda e: e.is_private))
     async def handle_commands(event):
         text_raw = event.raw_text.strip()
         text_lower = text_raw.lower()
-        target_chat = event.chat_id
+        chat_id = event.chat_id
 
-        # 1. أمر "غنيلي" (سرعة صاروخية وفورية بدون أي تحميل)
+        # 1. أمر "غنيلي" (بدون تكرار، وبدون إظهار أنها محولة أو أي وصف)
         if text_raw == "غنيلي":
             try:
                 await event.delete()
@@ -44,18 +47,30 @@ def setup_handlers(client, client_media_messages):
                 pass
 
             if not client_media_messages:
-                await client.send_message(target_chat, "عذراً، لم يتم العثور على ملفات صوتية في القناة حالياً.")
+                await event.respond("عذراً، لم يتم العثور على ملفات صوتية في القناة حالياً.")
                 return
 
-            selected_msg = random.choice(client_media_messages)
+            # اختيار أغنية عشوائية مع منع تكرار نفس الأغنية مباشرة في نفس المحادثة إذا كان هناك أكثر من أغنية واحدة
+            available_messages = client_media_messages
+            if len(client_media_messages) > 1 and chat_id in last_sent_messages:
+                available_messages = [m for m in client_media_messages if m.id != last_sent_messages[chat_id]]
+            
+            selected_msg = random.choice(available_messages)
+            last_sent_messages[chat_id] = selected_msg.id
 
             try:
-                # إرسال الميديا المخزنة مسبقاً مباشرة وبأقصى سرعة
-                await client.send_file(
-                    target_chat,
-                    selected_msg.media,
-                    caption=""
-                )
+                # تحميل الملف بصيغة بايتات (Bytes) وإعادة إرساله كملف جديد نظيف تماماً بدون علامة التحويل (Forward) ولا وصف (Caption)
+                file_bytes = await client.download_media(selected_msg, file=bytes)
+                if file_bytes:
+                    await client.send_file(
+                        chat_id,
+                        file_bytes,
+                        caption="",
+                        force_document=False
+                    )
+                else:
+                    # حل احتياطي مباشر في حال تعذر تحميل البايتات
+                    await event.respond(file=selected_msg.media, message="", parse_mode=None)
             except Exception as e:
                 print(f"[ERROR] فشل إرسال ملف القناة: {e}")
             return
@@ -89,10 +104,9 @@ def setup_handlers(client, client_media_messages):
                     print("[WARNING] لم يرد بوت التحميل بملف صوتي.")
                     return
 
-                await client.send_file(
-                    target_chat,
-                    audio_msg.media,
-                    caption=""
+                await event.respond(
+                    file=audio_msg.media,
+                    message=""
                 )
 
             except Exception as e:
