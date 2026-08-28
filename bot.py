@@ -2,6 +2,7 @@ import os
 import random
 import asyncio
 import time
+from pathlib import Path
 
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
@@ -19,83 +20,57 @@ SESSION_STRING = os.environ.get("SESSION_STRING", "")
 CHANNEL_USERNAME = "arggrw"
 DOWNLOAD_BOT = "@MsosMbot"
 
-PERFORMER = "@toe7e"
+# الميتاداتا المطلوبة
 AUDIO_TITLE = "."
+AUDIO_PERFORMER = "@toe7e"
 
-# عدد الملفات التي نأخذها من القناة
+# عدد رسائل القناة التي يبحث بينها أمر غنيلي
 CHANNEL_LIMIT = 150
 
-# عدد عمليات التحميل المتوازية أثناء تجهيز الكاش
-DOWNLOAD_WORKERS = 6
+# مدة انتظار بوت التحميل
+YOUTUBE_TIMEOUT = 30
 
-# مهلة انتظار بوت التحميل
-YOUTUBE_TIMEOUT = 15
+# مجلد الملفات المؤقتة
+TEMP_DIR = Path("./temp_audio")
+TEMP_DIR.mkdir(parents=True, exist_ok=True)
 
 
 # ============================================================
-# العميل
+# فحص الإعدادات
+# ============================================================
+
+if not API_ID:
+    raise RuntimeError("API_ID غير موجود في Railway Variables")
+
+if not API_HASH:
+    raise RuntimeError("API_HASH غير موجود في Railway Variables")
+
+if not SESSION_STRING:
+    raise RuntimeError("SESSION_STRING غير موجود في Railway Variables")
+
+
+# ============================================================
+# Telethon
 # ============================================================
 
 client = TelegramClient(
     StringSession(SESSION_STRING),
     API_ID,
     API_HASH,
-    connection_retries=None,
-    retry_delay=1
+    connection_retries=5,
+    retry_delay=2
 )
 
 
 # ============================================================
-# الكاش
-# ============================================================
-
-channel_media_messages = []
-
-# الملفات التي تم تحميلها مسبقاً
-audio_cache = []
-
-# قفل حتى لا يحصل تعارض أثناء تحديث الكاش
-cache_lock = asyncio.Lock()
-
-
-# ============================================================
-# تجهيز ملف الصوت للإرسال
-# ============================================================
-
-def get_audio_duration(message):
-    try:
-        if message.audio and message.audio.duration:
-            return message.audio.duration
-    except Exception:
-        pass
-
-    try:
-        if message.document:
-            for attr in message.document.attributes:
-                if isinstance(attr, DocumentAttributeAudio):
-                    return attr.duration or 0
-    except Exception:
-        pass
-
-    return 0
-
-
-def build_audio_attributes(message):
-    return [
-        DocumentAttributeAudio(
-            duration=get_audio_duration(message),
-            title=AUDIO_TITLE,
-            performer=PERFORMER,
-            voice=False
-        )
-    ]
-
-
-# ============================================================
-# التحقق من الملف الصوتي
+# أدوات الصوت
 # ============================================================
 
 def is_audio_message(message):
+    """
+    التحقق من أن الرسالة تحتوي على Audio أو Voice.
+    """
+
     if not message:
         return False
 
@@ -106,358 +81,418 @@ def is_audio_message(message):
         return True
 
     try:
-        if message.document and message.document.mime_type:
-            return message.document.mime_type.startswith("audio/")
+        if message.document:
+            mime = message.document.mime_type or ""
+
+            if mime.startswith("audio/"):
+                return True
+
     except Exception:
         pass
 
     return False
 
 
-# ============================================================
-# تحميل ملف واحد للكاش
-# ============================================================
-
-async def cache_single_audio(message, semaphore):
-    async with semaphore:
-        try:
-            path = await client.download_media(
-                message,
-                file="./audio_cache/"
-            )
-
-            if not path or not os.path.exists(path):
-                return None
-
-            return {
-                "message": message,
-                "path": path
-            }
-
-        except Exception as e:
-            print(f"[CACHE ERROR] {e}")
-            return None
-
-
-# ============================================================
-# تجهيز كاش القناة
-# ============================================================
-
-async def initialize_bot():
-    global channel_media_messages
-    global audio_cache
-
-    os.makedirs("./audio_cache", exist_ok=True)
-
-    print("[INFO] بدء قراءة ملفات القناة...")
+def get_audio_duration(message):
+    """
+    استخراج مدة الصوت.
+    """
 
     try:
-        messages = []
-
-        async for message in client.iter_messages(
-            CHANNEL_USERNAME,
-            limit=CHANNEL_LIMIT
-        ):
-            if is_audio_message(message):
-                messages.append(message)
-
-        channel_media_messages = messages
-
-        print(
-            f"[INFO] تم العثور على "
-            f"{len(channel_media_messages)} ملف صوتي."
-        )
-
-        # ----------------------------------------------------
-        # تحميل الملفات بشكل متوازٍ
-        # ----------------------------------------------------
-
-        semaphore = asyncio.Semaphore(DOWNLOAD_WORKERS)
-
-        tasks = [
-            cache_single_audio(message, semaphore)
-            for message in channel_media_messages
-        ]
-
-        results = await asyncio.gather(
-            *tasks,
-            return_exceptions=True
-        )
-
-        audio_cache = [
-            result
-            for result in results
-            if isinstance(result, dict)
-            and result.get("path")
-            and os.path.exists(result["path"])
-        ]
-
-        print(
-            f"[SUCCESS] تم تجهيز {len(audio_cache)} ملف "
-            f"في الكاش."
-        )
-
-    except Exception as e:
-        print(f"[ERROR] فشل تجهيز الكاش: {e}")
-
-
-# ============================================================
-# اختيار ملف عشوائي من الكاش
-# ============================================================
-
-def get_random_cached_audio():
-    if not audio_cache:
-        return None
-
-    # نحاول اختيار ملف موجود فعلياً
-    for _ in range(min(10, len(audio_cache))):
-        item = random.choice(audio_cache)
-
-        if os.path.exists(item["path"]):
-            return item
-
-    return None
-
-
-# ============================================================
-# إرسال الأغنية من الكاش
-# ============================================================
-
-async def send_cached_audio(chat_id, item):
-    path = item["path"]
-    message = item["message"]
+        if message.audio:
+            return message.audio.duration or 0
+    except Exception:
+        pass
 
     try:
+        if message.document:
+            for attribute in message.document.attributes:
+
+                if isinstance(attribute, DocumentAttributeAudio):
+                    return attribute.duration or 0
+
+    except Exception:
+        pass
+
+    return 0
+
+
+def audio_attributes(message):
+    """
+    Metadata المطلوبة:
+    الاسم = .
+    الفنان = @toe7e
+    """
+
+    return [
+        DocumentAttributeAudio(
+            duration=get_audio_duration(message),
+            title=AUDIO_TITLE,
+            performer=AUDIO_PERFORMER,
+            voice=False
+        )
+    ]
+
+
+# ============================================================
+# إرسال Audio معدل
+# ============================================================
+
+async def send_audio_repacked(chat_id, message):
+    """
+    تنزيل الصوت مؤقتاً ثم إعادة رفعه كـ Audio
+    بالاسم والفنان المطلوبين.
+    """
+
+    temp_file = None
+
+    try:
+
+        temp_file = await client.download_media(
+            message,
+            file=str(TEMP_DIR)
+        )
+
+        if not temp_file or not os.path.exists(temp_file):
+            print("[ERROR] فشل تنزيل الملف الصوتي.")
+            return False
+
         await client.send_file(
             chat_id,
-            path,
+            temp_file,
             caption="",
             force_document=False,
-            attributes=build_audio_attributes(message)
+            attributes=audio_attributes(message)
         )
 
         return True
 
     except Exception as e:
-        print(f"[SEND CACHE ERROR] {e}")
+
+        print(
+            f"[ERROR] خطأ أثناء إعادة إرسال الصوت: {e}"
+        )
+
         return False
 
+    finally:
+
+        if temp_file:
+
+            try:
+
+                if os.path.exists(temp_file):
+                    os.remove(temp_file)
+
+            except Exception:
+                pass
+
 
 # ============================================================
-# انتظار رد بوت التحميل
+# غنيلي
 # ============================================================
 
-async def wait_for_audio_message(after_id, timeout=YOUTUBE_TIMEOUT):
+async def send_random_channel_audio(chat_id):
+    """
+    يأخذ أغنية عشوائية مباشرة من القناة.
+    لا يوجد كاش إجباري عند بدء التشغيل.
+    """
+
+    try:
+
+        print(
+            f"[GHANNI] البحث عن أغنية من @{CHANNEL_USERNAME}..."
+        )
+
+        audio_messages = []
+
+        async for message in client.iter_messages(
+            CHANNEL_USERNAME,
+            limit=CHANNEL_LIMIT
+        ):
+
+            if is_audio_message(message):
+                audio_messages.append(message)
+
+        if not audio_messages:
+
+            print(
+                "[GHANNI] لم يتم العثور على ملفات صوتية."
+            )
+
+            await client.send_message(
+                chat_id,
+                "ماكو ملفات صوتية متوفرة بالقناة حالياً."
+            )
+
+            return
+
+        selected = random.choice(audio_messages)
+
+        print(
+            f"[GHANNI] تم اختيار الرسالة رقم {selected.id}"
+        )
+
+        # Voice يرسل مباشرة
+        if selected.voice:
+
+            try:
+
+                await client.send_file(
+                    chat_id,
+                    selected.media,
+                    caption=""
+                )
+
+                return
+
+            except Exception as e:
+
+                print(
+                    f"[GHANNI] فشل إرسال الـVoice: {e}"
+                )
+
+        # Audio يعاد رفعه بالـMetadata المطلوبة
+        success = await send_audio_repacked(
+            chat_id,
+            selected
+        )
+
+        if not success:
+
+            print(
+                "[GHANNI] فشل إعادة إرسال الأغنية."
+            )
+
+    except Exception as e:
+
+        print(
+            f"[GHANNI ERROR] {e}"
+        )
+
+
+# ============================================================
+# انتظار أغنية من بوت التحميل
+# ============================================================
+
+async def wait_for_download_bot_audio(
+    minimum_message_id,
+    timeout=YOUTUBE_TIMEOUT
+):
+    """
+    ينتظر رسالة صوتية جديدة من @MsosMbot.
+
+    لا يعمل polling كل 0.4 ثانية.
+    يستخدم Event من Telethon.
+    """
+
     loop = asyncio.get_running_loop()
 
     future = loop.create_future()
 
-    async def check_message(message):
+    async def listener(event):
+
         try:
+
+            message = event.message
+
             if not message:
                 return
 
-            if message.id <= after_id:
+            if message.id <= minimum_message_id:
                 return
 
             if not is_audio_message(message):
                 return
 
             if not future.done():
+
                 future.set_result(message)
 
         except Exception:
             pass
 
-    # Handler مؤقت
+    # إضافة Listener مؤقت
     client.add_event_handler(
-        check_message,
+        listener,
         events.NewMessage(chats=DOWNLOAD_BOT)
     )
 
     try:
+
         return await asyncio.wait_for(
             future,
             timeout=timeout
         )
 
     except asyncio.TimeoutError:
+
+        print(
+            "[YT] انتهت مهلة الانتظار."
+        )
+
         return None
 
     finally:
+
         try:
+
             client.remove_event_handler(
-                check_message,
+                listener,
                 events.NewMessage(chats=DOWNLOAD_BOT)
             )
+
         except Exception:
             pass
 
 
 # ============================================================
-# أمر اليوتيوب
+# يوت / يوتو
 # ============================================================
 
 async def process_youtube(chat_id, query):
-    try:
-        started = time.monotonic()
+    """
+    إرسال البحث إلى بوت التحميل
+    ثم انتظار ملف الصوت وإرساله للخاص.
+    """
 
-        sent_msg = await client.send_message(
+    started = time.monotonic()
+
+    try:
+
+        print(
+            f"[YT] البحث عن: {query}"
+        )
+
+        # إرسال الطلب
+        request_message = await client.send_message(
             DOWNLOAD_BOT,
             f"يوت {query}"
         )
 
         print(
-            f"[YT] تم إرسال الطلب: {query}"
+            f"[YT] تم إرسال الطلب، رقم الرسالة: "
+            f"{request_message.id}"
         )
 
-        audio_msg = await wait_for_audio_message(
-            sent_msg.id,
+        # انتظار الملف
+        audio_message = await wait_for_download_bot_audio(
+            request_message.id,
             YOUTUBE_TIMEOUT
         )
 
-        if not audio_msg:
+        if not audio_message:
+
             print(
-                "[YT] انتهت المهلة بدون ملف صوتي."
+                "[YT] لم يصل ملف صوتي من البوت."
             )
+
             return
 
         print(
-            f"[YT] وصل الملف خلال "
-            f"{time.monotonic() - started:.2f}s"
+            "[YT] وصل الملف من بوت التحميل."
         )
 
-        # ----------------------------------------------------
-        # إذا كان Voice نرسله مباشرة
-        # ----------------------------------------------------
+        # إذا Voice
+        if audio_message.voice:
 
-        if audio_msg.voice:
-            await client.send_file(
-                chat_id,
-                audio_msg.media,
-                caption=""
-            )
-            return
+            try:
 
-        # ----------------------------------------------------
-        # تحميل الملف ثم إعادة رفعه ببياناتنا
-        # ----------------------------------------------------
+                await client.send_file(
+                    chat_id,
+                    audio_message.media,
+                    caption=""
+                )
 
-        temp_path = None
+                print(
+                    f"[YT] تم إرسال الـVoice خلال "
+                    f"{time.monotonic() - started:.2f}s"
+                )
 
-        try:
-            temp_path = await client.download_media(
-                audio_msg,
-                file="./audio_cache/"
-            )
-
-            if not temp_path or not os.path.exists(temp_path):
-                print("[YT] فشل تحميل الملف.")
                 return
 
-            await client.send_file(
-                chat_id,
-                temp_path,
-                caption="",
-                force_document=False,
-                attributes=build_audio_attributes(audio_msg)
-            )
+            except Exception as e:
+
+                print(
+                    f"[YT] خطأ بإرسال الـVoice: {e}"
+                )
+
+        # إعادة رفع Audio بالـMetadata
+        success = await send_audio_repacked(
+            chat_id,
+            audio_message
+        )
+
+        if success:
 
             print(
-                f"[YT] تم الإرسال خلال "
+                f"[YT] تم إرسال الأغنية خلال "
                 f"{time.monotonic() - started:.2f}s"
             )
 
-        finally:
-            if temp_path and os.path.exists(temp_path):
-                try:
-                    os.remove(temp_path)
-                except Exception:
-                    pass
+        else:
+
+            print(
+                "[YT] فشل إرسال الأغنية."
+            )
 
     except Exception as e:
-        print(f"[YT ERROR] {e}")
+
+        print(
+            f"[YT ERROR] {e}"
+        )
 
 
 # ============================================================
-# استقبال الأوامر
+# استقبال الرسائل
 # ============================================================
 
-@client.on(events.NewMessage(incoming=True, outgoing=True))
+@client.on(
+    events.NewMessage(
+        incoming=True,
+        outgoing=True
+    )
+)
 async def handle_commands(event):
 
+    # فقط الخاص
     if not event.is_private:
         return
 
-    text_raw = event.raw_text.strip()
+    text = event.raw_text.strip()
 
-    if not text_raw:
+    if not text:
         return
 
-    text_lower = text_raw.lower()
-    target_chat = event.chat_id
+    text_lower = text.lower()
+
+    chat_id = event.chat_id
 
     # ========================================================
     # غنيلي
     # ========================================================
 
-    if text_raw == "غنيلي":
+    if text == "غنيلي":
 
         try:
             await event.delete()
         except Exception:
             pass
 
-        if not audio_cache:
-            await client.send_message(
-                target_chat,
-                "عذراً، الكاش الصوتي غير جاهز حالياً."
-            )
-            return
-
-        item = get_random_cached_audio()
-
-        if not item:
-            await client.send_message(
-                target_chat,
-                "تعذر العثور على ملف صوتي جاهز."
-            )
-            return
-
-        success = await send_cached_audio(
-            target_chat,
-            item
+        # تنفيذ مباشر بدون Cache
+        await send_random_channel_audio(
+            chat_id
         )
-
-        if not success:
-            # محاولة ثانية بملف عشوائي آخر
-            for _ in range(2):
-                item = get_random_cached_audio()
-
-                if not item:
-                    break
-
-                if await send_cached_audio(
-                    target_chat,
-                    item
-                ):
-                    break
 
         return
 
     # ========================================================
-    # يوت / يوتو
+    # يوت
     # ========================================================
 
-    if (
-        text_lower.startswith("يوت ")
-        or text_lower.startswith("يوتو ")
-    ):
+    if text_lower.startswith("يوت "):
 
-        if text_lower.startswith("يوت "):
-            query = text_raw[4:].strip()
-        else:
-            query = text_raw[5:].strip()
+        query = text[4:].strip()
 
         if not query:
             return
@@ -467,30 +502,60 @@ async def handle_commands(event):
         except Exception:
             pass
 
-        await process_youtube(
-            target_chat,
-            query
+        # تشغيل المهمة
+        asyncio.create_task(
+            process_youtube(
+                chat_id,
+                query
+            )
         )
 
+        return
 
-# ============================================================
-# تنظيف الكاش عند الإغلاق
-# ============================================================
+    # ========================================================
+    # يوتو
+    # ========================================================
 
-async def cleanup_cache():
-    try:
-        if not os.path.exists("./audio_cache/"):
+    if text_lower.startswith("يوتو "):
+
+        query = text[5:].strip()
+
+        if not query:
             return
 
-        for filename in os.listdir("./audio_cache/"):
-            path = os.path.join(
-                "./audio_cache/",
-                filename
+        try:
+            await event.delete()
+        except Exception:
+            pass
+
+        asyncio.create_task(
+            process_youtube(
+                chat_id,
+                query
             )
+        )
+
+        return
+
+
+# ============================================================
+# تنظيف الملفات المؤقتة
+# ============================================================
+
+def cleanup_temp_files():
+
+    try:
+
+        if not TEMP_DIR.exists():
+            return
+
+        for file in TEMP_DIR.iterdir():
 
             try:
-                if os.path.isfile(path):
-                    os.remove(path)
+
+                if file.is_file():
+                    file.unlink()
+
             except Exception:
                 pass
 
@@ -504,28 +569,49 @@ async def cleanup_cache():
 
 async def main():
 
-    print("=" * 50)
+    print("=" * 55)
     print("[INFO] تشغيل اليوزربوت...")
-    print("[INFO] وضع السرعة العالية مفعّل")
-    print("=" * 50)
-
-    await client.start()
-
-    # تجهيز الملفات قبل استقبال الأوامر
-    await initialize_bot()
-
-    print("=" * 50)
-    print("[SUCCESS] اليوزربوت يعمل الآن")
-    print(
-        f"[CACHE] {len(audio_cache)} ملف جاهز للإرسال"
-    )
-    print("=" * 50)
+    print("[INFO] نظام الصوت السريع مفعل")
+    print("=" * 55)
 
     try:
+
+        # الاتصال بالحساب
+        await client.start()
+
+        print(
+            "[SUCCESS] تم الاتصال بحساب Telegram بنجاح."
+        )
+
+        print(
+            f"[INFO] قناة الأغاني: @{CHANNEL_USERNAME}"
+        )
+
+        print(
+            f"[INFO] بوت التحميل: {DOWNLOAD_BOT}"
+        )
+
+        print(
+            "[INFO] الأوامر: غنيلي / يوت / يوتو"
+        )
+
+        print("=" * 55)
+        print("[SUCCESS] اليوزربوت يعمل الآن.")
+        print("=" * 55)
+
         await client.run_until_disconnected()
 
+    except Exception as e:
+
+        print(
+            f"[FATAL ERROR] {e}"
+        )
+
+        raise
+
     finally:
-        await cleanup_cache()
+
+        cleanup_temp_files()
 
 
 # ============================================================
@@ -533,4 +619,5 @@ async def main():
 # ============================================================
 
 if __name__ == "__main__":
+
     asyncio.run(main())
