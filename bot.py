@@ -68,7 +68,7 @@ async def handle_incoming_message(event):
             await event.respond(caption)
             await client.forward_messages(event.chat_id, selected_msg)
 
-async main():
+async def main():
     print("جاري تشغيل اليوزر بوت...")
     await client.start()
     await cache_channel_media()
