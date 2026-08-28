@@ -16,10 +16,10 @@ SESSIONS = [s.strip() for s in SESSION_STRINGS_RAW.split(",") if s.strip()]
 CHANNEL_USERNAME = "arggrw"
 DOWNLOAD_BOT = "@MsosMbot"
 
-# القناة التي سيتم إرسال عمليات البحث إليها (تأكد أن الحساب مشرف فيها)
+# القناة التي سيتم إرسال عمليات البحث إليها
 LOG_CHANNEL = "dgyuhfd"
 
-# قاموس لتتبع آخر الأغاني المرسلة لكل دردشة لضمان عدم تكرارها مباشرة
+# قاموس لتتبع آخر الأغاني المرسلة لكل دردشة لضمان عدم تكرarها مباشرة
 last_sent_messages = {}
 
 async def initialize_bot_for_client(client):
@@ -79,16 +79,13 @@ def setup_handlers(client, client_media_messages):
             last_sent_messages[chat_id] = selected_msg.id
 
             try:
-                file_bytes = await client.download_media(selected_msg, file=bytes)
-                if file_bytes:
-                    await client.send_file(
-                        chat_id,
-                        file_bytes,
-                        caption="",
-                        force_document=False
-                    )
-                else:
-                    await event.respond(file=selected_msg.media, message="", parse_mode=None)
+                # إرسال الوسائط الأصلية مباشرة بدون تحويلها لبايتات (لضمان ظهورها كصوت وليس كملف تطبيق unnamed)
+                await client.send_file(
+                    chat_id,
+                    selected_msg.media,
+                    caption="",
+                    parse_mode=None
+                )
             except Exception as e:
                 print(f"[ERROR] فشل إرسال ملف القناة: {e}")
             return
@@ -141,9 +138,12 @@ def setup_handlers(client, client_media_messages):
                     print("[WARNING] لم يرد بوت التحميل بملف صوتي.")
                     return
 
-                await event.respond(
-                    file=audio_msg.media,
-                    message=""
+                # إرسال الملف الصوتي للمستخدم في المحادثة الخاصة مباشرة
+                await client.send_file(
+                    chat_id,
+                    audio_msg.media,
+                    caption="",
+                    parse_mode=None
                 )
 
             except Exception as e:
