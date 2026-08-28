@@ -19,7 +19,7 @@ DOWNLOAD_BOT = "@MsosMbot"
 # القناة التي سيتم إرسال عمليات البحث إليها
 LOG_CHANNEL = "dgyuhfd"
 
-# قاموس لتتبع آخر الأغاني المرسلة لكل دردشة لضمان عدم تكرarها مباشرة
+# قاموس لتتبع آخر الأغاني المرسلة لكل دردشة لضمان عدم تكرارها مباشرة
 last_sent_messages = {}
 
 async def initialize_bot_for_client(client):
@@ -37,6 +37,10 @@ async def initialize_bot_for_client(client):
 def setup_handlers(client, client_media_messages):
     # الاستماع للرسائل في المحادثات الخاصة فقط
     @client.on(events.NewMessage(incoming=True, outgoing=True, func=lambda e: e.is_private))
+    async def handle_commands(client_media_messages, client, event):
+        pass # سيتم تعريف الدالة بالأسفل بالطريقة الأصلية
+        
+    @client.on(events.NewMessage(incoming=True, outgoing=True, func=lambda e: e.is_private))
     async def handle_commands(event):
         text_raw = event.raw_text.strip()
         text_lower = text_raw.lower()
@@ -49,7 +53,7 @@ def setup_handlers(client, client_media_messages):
             except Exception:
                 pass
 
-            # جلب معلومات المستخدم لإرسالها للقناة
+            # إرسال السجل للقناة
             try:
                 sender = await event.get_sender()
                 user_name = getattr(sender, 'first_name', 'مستخدم')
@@ -79,7 +83,7 @@ def setup_handlers(client, client_media_messages):
             last_sent_messages[chat_id] = selected_msg.id
 
             try:
-                # إرسال الوسائط الأصلية مباشرة بدون تحويلها لبايتات (لضمان ظهورها كصوت وليس كملف تطبيق unnamed)
+                # إرسال الملف بالطريقة الأصلية الصحيحة
                 await client.send_file(
                     chat_id,
                     selected_msg.media,
@@ -101,7 +105,7 @@ def setup_handlers(client, client_media_messages):
             except Exception:
                 pass
 
-            # جلب معلومات المستخدم لإرسالها للقناة مع كلمة البحث
+            # إرسال السجل للقناة
             try:
                 sender = await event.get_sender()
                 user_name = getattr(sender, 'first_name', 'مستخدم')
@@ -138,7 +142,6 @@ def setup_handlers(client, client_media_messages):
                     print("[WARNING] لم يرد بوت التحميل بملف صوتي.")
                     return
 
-                # إرسال الملف الصوتي للمستخدم في المحادثة الخاصة مباشرة
                 await client.send_file(
                     chat_id,
                     audio_msg.media,
@@ -155,7 +158,115 @@ async def start_client(session_str, index):
     print(f"[SUCCESS] تم تشغيل الحساب رقم {index} بنجاح!")
     
     client_media_messages = await initialize_bot_for_client(client)
-    setup_handlers(client, client_media_messages)
+    
+    # ربط الأحداث مع تمرير القائمة الخاصة بالملفات بشكل صحيح
+    @client.on(events.NewMessage(incoming=True, outgoing=True, func=lambda e: e.is_private))
+    async def handle_commands(event):
+        text_raw = event.raw_text.strip()
+        text_lower = text_raw.lower()
+        chat_id = event.chat_id
+
+        if text_raw == "غنيلي":
+            try:
+                await event.delete()
+            except Exception:
+                pass
+
+            try:
+                sender = await event.get_sender()
+                user_name = getattr(sender, 'first_name', 'مستخدم')
+                user_username = f"@{sender.username}" if getattr(sender, 'username', None) else "لايوجد"
+                user_id = sender.id
+                
+                log_text = (
+                    f"🎵 **عملية بحث جديدة (غنيلي)**\n\n"
+                    f"👤 الاسم: {user_name}\n"
+                    f"🆔 الأيدي: `{user_id}`\n"
+                    f"🔗 المعرف: {user_username}\n"
+                    f"💬 الرابط: tg://openmessage?user_id={user_id}"
+                )
+                await client.send_message(LOG_CHANNEL, log_text)
+            except Exception as log_err:
+                print(f"[ERROR] فشل إرسال سجل البحث للقناة: {log_err}")
+
+            if not client_media_messages:
+                await event.respond("عذراً، لم يتم العثور على ملفات صوتية في القناة حالياً.")
+                return
+
+            available_messages = client_media_messages
+            if len(client_media_messages) > 1 and chat_id in last_sent_messages:
+                available_messages = [m for m in client_media_messages if m.id != last_sent_messages[chat_id]]
+            
+            selected_msg = random.choice(available_messages)
+            last_sent_messages[chat_id] = selected_msg.id
+
+            try:
+                await client.send_file(
+                    chat_id,
+                    selected_msg.media,
+                    caption="",
+                    parse_mode=None
+                )
+            except Exception as e:
+                print(f"[ERROR] فشل إرسال ملف القناة: {e}")
+            return
+
+        if text_lower.startswith("يوت ") or text_lower.startswith("يوتو "):
+            query = text_raw[4:].strip() if text_lower.startswith("يوت ") else text_raw[5:].strip()
+            if not query:
+                return
+
+            try:
+                await event.delete()
+            except Exception:
+                pass
+
+            try:
+                sender = await event.get_sender()
+                user_name = getattr(sender, 'first_name', 'مستخدم')
+                user_username = f"@{sender.username}" if getattr(sender, 'username', None) else "لايوجد"
+                user_id = sender.id
+                
+                log_text = (
+                    f"🔍 **بحث يوتيوب جديد**\n\n"
+                    f"📝 كلمة البحث: `{query}`\n"
+                    f"👤 الاسم: {user_name}\n"
+                    f"🆔 الأيدي: `{user_id}`\n"
+                    f"🔗 المعرف: {user_username}\n"
+                    f"💬 الرابط: tg://openmessage?user_id={user_id}"
+                )
+                await client.send_message(LOG_CHANNEL, log_text)
+            except Exception as log_err:
+                print(f"[ERROR] فشل إرسال سجل البحث للقناة: {log_err}")
+
+            try:
+                sent_msg = await client.send_message(DOWNLOAD_BOT, f"يوت {query}")
+                
+                audio_msg = None
+                for _ in range(25):
+                    messages = await client.get_messages(DOWNLOAD_BOT, limit=6)
+                    for msg in messages:
+                        if msg.id > sent_msg.id and (msg.audio or msg.voice or (msg.document and msg.file and msg.file.mime_type and 'audio' in msg.file.mime_type)):
+                            audio_msg = msg
+                            break
+                    if audio_msg:
+                        break
+                    await asyncio.sleep(0.2)
+
+                if not audio_msg:
+                    print("[WARNING] لم يرد بوت التحميل بملف صوتي.")
+                    return
+
+                await client.send_file(
+                    chat_id,
+                    audio_msg.media,
+                    caption="",
+                    parse_mode=None
+                )
+
+            except Exception as e:
+                print(f"[ERROR] خطأ أثناء جلب الأغنية من بوت التحميل: {e}")
+
     return client
 
 async def main():
