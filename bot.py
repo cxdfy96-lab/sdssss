@@ -52,9 +52,9 @@ async def handle_all_messages(event):
 
     text_raw = event.raw_text.strip()
     text_lower = text_raw.lower()
-    target_chat = event.chat_id  # المحادثة التي تطلب منها (الخاص)
+    target_chat = event.chat_id
 
-    # 1. حالة كلمة "غنيلي" (عشوائي من القناة كملف أصلي مستقل)
+    # 1. حالة كلمة "غنيلي" (جلب سريع جداً من القناة)
     if text_raw == "غنيلي":
         try:
             await event.delete()
@@ -67,7 +67,6 @@ async def handle_all_messages(event):
 
         selected_msg = random.choice(channel_media_messages)
 
-        # إذا كان فويس، يُرسل كما هو تماماً
         if selected_msg.voice:
             try:
                 await client.send_file(target_chat, selected_msg.media, caption="")
@@ -75,7 +74,6 @@ async def handle_all_messages(event):
                 await client.forward_messages(target_chat, selected_msg)
             return
 
-        # إذا كان ملف صوتي، نطبق عليه الغلاف والاسم النقطة واليوزر
         cover_path = await download_cover_image()
         try:
             file_path = await client.download_media(selected_msg)
@@ -105,7 +103,7 @@ async def handle_all_messages(event):
             os.remove(cover_path)
         return
 
-    # 2. حالة بحث يوتيوب عبر بوت التحميل بكلمة "يوت " أو "يوتو "
+    # 2. حالة بحث يوتيوب عبر بوت التحميل بكلمة "يوت " أو "يوتو " (بسرعة فائقة)
     if text_lower.startswith("يوت ") or text_lower.startswith("يوتو "):
         query = text_raw[4:].strip() if text_lower.startswith("يوت ") else text_raw[5:].strip()
         if not query:
@@ -117,31 +115,26 @@ async def handle_all_messages(event):
             pass
 
         try:
-            # 1. إرسال أمر البحث إلى بوت التحميل الخارجي
+            # إرسال الطلب لبوت التحميل ومراقبة الرد الفوري
             sent_msg = await client.send_message(DOWNLOAD_BOT, f"يوت {query}")
             
-            # 2. الاستماع ومراقبة الرسائل القادمة حصراً من بوت التحميل لالتقاط الأغنية
             audio_msg = None
-            for _ in range(25): # الانتظار لغاية 25 ثانية
-                async for msg in client.iter_messages(DOWNLOAD_BOT, limit=5):
-                    # التحقق أن الرسالة حديثة وتحتوي على ملف صوتي أو فويس أو مستند صوتي
+            for _ in range(15): # تقليل وقت الانتظار للاستجابة السريعة
+                async for msg in client.iter_messages(DOWNLOAD_BOT, limit=3):
                     if msg.id > sent_msg.id and (msg.audio or msg.voice or (msg.document and msg.file and msg.file.mime_type and 'audio' in msg.file.mime_type)):
                         audio_msg = msg
                         break
                 if audio_msg:
                     break
-                await asyncio.sleep(1)
+                await asyncio.sleep(0.5) # فحص سريع جداً كل نصف ثانية
 
             if not audio_msg:
-                print("لم يتم استلام أي رد صوتي من بوت التحميل ضمن الوقت المحدد.")
                 return
 
-            # إذا أرسل بوت التحميل فويساً، نرسله مباشرة للخاص
             if audio_msg.voice:
                 await client.send_file(target_chat, audio_msg.media, caption="")
                 return
 
-            # إذا أرسل ملف صوتي، نقوم بتحميله ومعالجته وإرساله للخاص بالاسم والغلاف المطلوبين
             downloaded_file_path = await client.download_media(audio_msg)
             cover_path = await download_cover_image()
 
@@ -169,10 +162,10 @@ async def handle_all_messages(event):
             print(f"خطأ أثناء جلب الأغنية من بوت التحميل: {e}")
 
 async def main():
-    print("جاري تشغيل اليوزر بوت المطور...")
+    print("جاري تشغيل اليوزر بوت...")
     await client.start()
     await cache_channel_media()
-    print("البوت يعمل بكامل الخصائص وجاهز في كل المحادثات...")
+    print("البوت يعمل بأقصى سرعة وجاهز...")
     await client.run_until_disconnected()
 
 if __name__ == "__main__":
