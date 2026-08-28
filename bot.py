@@ -1,51 +1,79 @@
 import os
 import random
 import asyncio
+import urllib.request
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 from telethon.tl.types import DocumentAttributeAudio
+from mutagen.mp3 import MP3
+from mutagen.id3 import ID3, APIC, TIT2, TPE1, error
 
 # جلب بيانات الاتصال من متغيرات البيئة في Railway
 API_ID = int(os.environ.get("API_ID", 0))
 API_HASH = os.environ.get("API_HASH", "")
 SESSION_STRING = os.environ.get("SESSION_STRING", "")
 
-# معرف قناتك الخاصة بالأغاني والفويسات العشوائية
+# إعدادات البوت والقناة
 CHANNEL_USERNAME = "arggrw"
-
-# بوت التحميل المعتمد
 DOWNLOAD_BOT = "@MsosMbot"
-
-# رابط صورة الغلاف المباشر من GitHub الخاص بك
 COVER_IMAGE_URL = "https://raw.githubusercontent.com/cxdfy96-lab/sdsss/main/IMG_20260828_150037_840.jpg"
 
 client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
-
 channel_media_messages = []
+cover_cache_path = "cover_cached.jpg"
 
-async def cache_channel_media():
+async def initialize_bot():
     global channel_media_messages
+    print("[INFO] جاري تحميل الغلاف وتخزين رسائل القناة مؤقتاً...")
+    
+    # تحميل الغلاف وتخزينه محلياً للسرعة القصوى
     try:
-        print("جاري جلب الملفات الصوتية والبصمات من القناة العشوائية...")
+        urllib.request.urlretrieve(COVER_IMAGE_URL, cover_cache_path)
+    except Exception as e:
+        print(f"[WARNING] لم يتم تحميل الغلاف: {e}")
+
+    # جلب الرسائل من القناة
+    try:
         async for message in client.iter_messages(CHANNEL_USERNAME, limit=150):
             if message.audio or message.voice or (message.document and message.document.mime_type and 'audio' in message.document.mime_type):
                 channel_media_messages.append(message)
-        print(f"تم تحميل {len(channel_media_messages)} ملفاً صوتياً من القناة بنجاح.")
+        print(f"[INFO] تم تخزين {len(channel_media_messages)} ملفاً من القناة بنجاح.")
     except Exception as e:
-        print(f"خطأ أثناء جلب ملفات القناة: {e}")
+        print(f"[ERROR] خطأ أثناء جلب ملفات القناة: {e}")
 
-async def get_cover():
-    import urllib.request
-    cover_path = "cover.jpg"
-    if not os.path.exists(cover_path):
+def process_audio_metadata(file_path):
+    """دالة احترافية لحقن الغلاف، النقطة (.)، واسم الفنان بداخل الملف الصوتي"""
+    try:
+        audio = MP3(file_path, ID3=ID3)
+        
+        # إضافة العلامات إذا لم تكن موجودة
         try:
-            urllib.request.urlretrieve(COVER_IMAGE_URL, cover_path)
-        except Exception:
+            audio.add_tags()
+        except error:
             pass
-    return cover_path if os.path.exists(cover_path) else None
+
+        # تعديل العنوان إلى نقطة (.) والفنان إلى @toe7e
+        audio.tags.add(TIT2(encoding=3, text='.'))
+        audio.tags.add(TPE1(encoding=3, text='@toe7e'))
+
+        # حقن صورة الغلاف بداخل الملف الصوتي إذا كانت متوفرة
+        if os.path.exists(cover_cache_path):
+            with open(cover_cache_path, 'rb') as album_art:
+                audio.tags.add(
+                    APIC(
+                        encoding=3,
+                        mime='image/jpeg',
+                        type=3, # الغلاف الأمامي
+                        desc='Cover',
+                        data=album_art.read()
+                    )
+                )
+        audio.save()
+    except Exception as e:
+        print(f"[WARNING] تعذر تعديل الميتا داتا للصوت: {e}")
 
 @client.on(events.NewMessage(outgoing=True, incoming=True))
-async def handle_all_messages(event):
+async def handle_commands(event):
     if not event.is_private:
         return
 
@@ -53,7 +81,7 @@ async def handle_all_messages(event):
     text_lower = text_raw.lower()
     target_chat = event.chat_id
 
-    # 1. الحالة الأولى: "غنيلي" (سرعة فائقة جداً من القناة)
+    # 1. أمر "غنيلي" (جلب عشوائي من القناة)
     if text_raw == "غنيلي":
         try:
             await event.delete()
@@ -66,7 +94,7 @@ async def handle_all_messages(event):
 
         selected_msg = random.choice(channel_media_messages)
 
-        # إذا كان فويس، يُرسل فوراً وبدون أي تعديل
+        # إذا كان بصمة صوتية (Voice)، يُرسل كما هو
         if selected_msg.voice:
             try:
                 await client.send_file(target_chat, selected_msg.media, caption="")
@@ -74,17 +102,20 @@ async def handle_all_messages(event):
                 await client.forward_messages(target_chat, selected_msg)
             return
 
-        # إذا كان ملف صوتي، نرسله فوراً مع حقن الغلاف واسم النقطة ويوزر الفنان
-        cover_path = await get_cover()
+        # إذا كان ملف صوتي، يتم تحميله ومعالجته وإرساله كملف أصلي
+        file_path = None
         try:
+            file_path = await client.download_media(selected_msg)
+            process_audio_metadata(file_path)
+
             await client.send_file(
                 target_chat,
-                selected_msg.media,
+                file_path,
                 caption="",
-                thumb=cover_path,
+                thumb=cover_cache_path if os.path.exists(cover_cache_path) else None,
                 attributes=[
                     DocumentAttributeAudio(
-                        duration=selected_msg.audio.duration if selected_msg.audio and selected_msg.audio.duration else 0,
+                        duration=0,
                         title=".",
                         performer="@toe7e",
                         voice=False
@@ -92,11 +123,13 @@ async def handle_all_messages(event):
                 ]
             )
         except Exception as e:
-            print(f"خطأ في إرسال ملف القناة: {e}")
-            await client.forward_messages(target_chat, selected_msg)
+            print(f"[ERROR] فشل إرسال ملف القناة: {e}")
+        finally:
+            if file_path and os.path.exists(file_path):
+                os.remove(file_path)
         return
 
-    # 2. الحالة الثانية: أمر البحث "يوت " أو "يوتو " (بسرعة البرق من بوت التحميل)
+    # 2. أمر بحث اليوتيوب (يوت / يوتو) عبر بوت التحميل
     if text_lower.startswith("يوت ") or text_lower.startswith("يوتو "):
         query = text_raw[4:].strip() if text_lower.startswith("يوت ") else text_raw[5:].strip()
         if not query:
@@ -111,15 +144,15 @@ async def handle_all_messages(event):
             sent_msg = await client.send_message(DOWNLOAD_BOT, f"يوت {query}")
             
             audio_msg = None
-            # استجابة سريعة جداً وخاطفة للرد القادم من بوت التحميل
-            for _ in range(12):
+            # استماع فائق السرعة لرد بوت التحميل
+            for _ in range(20):
                 async for msg in client.iter_messages(DOWNLOAD_BOT, limit=3):
                     if msg.id > sent_msg.id and (msg.audio or msg.voice or (msg.document and msg.file and msg.file.mime_type and 'audio' in msg.file.mime_type)):
                         audio_msg = msg
                         break
                 if audio_msg:
                     break
-                await asyncio.sleep(0.3) # فحص فائق السرعة كل 300 جزء من الثانية
+                await asyncio.sleep(0.4)
 
             if not audio_msg:
                 return
@@ -128,17 +161,17 @@ async def handle_all_messages(event):
                 await client.send_file(target_chat, audio_msg.media, caption="")
                 return
 
-            cover_path = await get_cover()
+            downloaded_file_path = await client.download_media(audio_msg)
+            process_audio_metadata(downloaded_file_path)
 
-            # إرسال فوري للأغنية بالخصائص المطلوبة والصورة
             await client.send_file(
                 target_chat,
-                audio_msg.media,
+                downloaded_file_path,
                 caption="",
-                thumb=cover_path,
+                thumb=cover_cache_path if os.path.exists(cover_cache_path) else None,
                 attributes=[
                     DocumentAttributeAudio(
-                        duration=audio_msg.audio.duration if audio_msg.audio and audio_msg.audio.duration else 0,
+                        duration=0,
                         title=".",
                         performer="@toe7e",
                         voice=False
@@ -146,14 +179,17 @@ async def handle_all_messages(event):
                 ]
             )
 
+            if downloaded_file_path and os.path.exists(downloaded_file_path):
+                os.remove(downloaded_file_path)
+
         except Exception as e:
-            print(f"خطأ أثناء جلب الأغنية من بوت التحميل: {e}")
+            print(f"[ERROR] خطأ أثناء جلب الأغنية من بوت التحميل: {e}")
 
 async def main():
-    print("جاري تشغيل اليوزر بوت بأقصى سرعة...")
+    print("[INFO] جاري تشغيل اليوزر بوت الاحترافي...")
     await client.start()
-    await cache_channel_media()
-    print("البوت جاهز ويعمل الآن...")
+    await initialize_bot()
+    print("[SUCCESS] البوت يعمل بكامل الخصائص والسرعة القصوى الآن...")
     await client.run_until_disconnected()
 
 if __name__ == "__main__":
