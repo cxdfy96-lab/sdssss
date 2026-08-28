@@ -5,14 +5,12 @@ from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 
 # بيانات الاتصال الأساسية
-API_ID = 1234567  # استبدل هذا برقم الـ API ID الخاص بك
-API_HASH = "your_api_hash_here"  # استبدل هذا برقم الـ API HASH الخاص بك
+API_ID = int(os.environ.get("API_ID", 0))
+API_HASH = os.environ.get("API_HASH", "")
 
-# ضع جلسات الحسابين هنا داخل القائمة (أضف كود الجلسة الأولى والثانية)
-SESSIONS = [
-    "1BwX... (جلسة الحساب الأول)",
-    "1BwY... (جلسة الحساب الثاني)"
-]
+# قراءة الجلسات من متغير البيئة SESSION_STRING (مفصولات بفاصلة ,)
+SESSION_STRINGS_RAW = os.environ.get("SESSION_STRING", "")
+SESSIONS = [s.strip() for s in SESSION_STRINGS_RAW.split(",") if s.strip()]
 
 # إعدادات البوت والقناة
 CHANNEL_USERNAME = "arggrw"
@@ -33,11 +31,9 @@ async def initialize_bot(client):
             print(f"[ERROR] خطأ أثناء جلب ملفات القناة: {e}")
 
 def setup_handlers(client):
-    @client.on(events.NewMessage(outgoing=True, incoming=True))
+    # إزالة شرط الحدث الخاص حتى يعمل في الخاص، المجموعات، والقنوات
+    @client.on(events.NewMessage(outgoing=True))
     async def handle_commands(event):
-        if not event.is_private:
-            return
-
         text_raw = event.raw_text.strip()
         text_lower = text_raw.lower()
         target_chat = event.chat_id
@@ -111,20 +107,19 @@ async def start_client(session_str, index):
     client = TelegramClient(StringSession(session_str), API_ID, API_HASH)
     setup_handlers(client)
     await client.start()
-    print(f"[SUCCESS] تم تسجيل دخول الحساب رقم {index} وتشغيله بنجاح!")
+    print(f"[SUCCESS] تم تشغيل الحساب رقم {index} بنجاح!")
     await initialize_bot(client)
     return client
 
 async def main():
-    if not SESSIONS or SESSIONS[0].startswith("1BwX"):
-        print("[ERROR] يرجى إضافة جلسات الحسابات الصحيحة داخل مصفوفة SESSIONS في الكود.")
+    if not SESSIONS:
+        print("[ERROR] لم يتم العثور على أي جلسات في متغير SESSION_STRING")
         return
 
-    print(f"[INFO] جاري تشغيل {len(SESSIONS)} حسابات في نفس الوقت...")
+    print(f"[INFO] جاري تشغيل {len(SESSIONS)} حسابات من متغيرات البيئة...")
     tasks = [start_client(sess, i+1) for i, sess in enumerate(SESSIONS)]
     clients = await asyncio.gather(*tasks)
     
-    # إبقاء الحسابات كلها تعمل مستمرة
     await asyncio.gather(*(client.run_until_disconnected() for client in clients))
 
 if __name__ == "__main__":
