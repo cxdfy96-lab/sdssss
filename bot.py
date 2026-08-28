@@ -1,703 +1,126 @@
 import os
+import random
 import asyncio
-import time
-
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 
-
-# ============================================================
-# CONFIG
-# ============================================================
-
-API_ID = int(os.environ.get("API_ID", "0"))
+# بيانات الاتصال بمتغيرات البيئة في Railway
+API_ID = int(os.environ.get("API_ID", 0))
 API_HASH = os.environ.get("API_HASH", "")
 SESSION_STRING = os.environ.get("SESSION_STRING", "")
 
+# إعدادات البوت والقناة
 CHANNEL_USERNAME = "arggrw"
-DOWNLOAD_BOT = "MsosMbot"
+DOWNLOAD_BOT = "@MsosMbot"
 
-YOUTUBE_TIMEOUT = 90
+client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
+channel_media_messages = []
 
-
-# ============================================================
-# CHECK CONFIG
-# ============================================================
-
-if not API_ID:
-    raise RuntimeError("API_ID غير موجود")
-
-if not API_HASH:
-    raise RuntimeError("API_HASH غير موجود")
-
-if not SESSION_STRING:
-    raise RuntimeError("SESSION_STRING غير موجود")
-
-
-# ============================================================
-# CLIENT
-# ============================================================
-
-client = TelegramClient(
-    StringSession(SESSION_STRING),
-    API_ID,
-    API_HASH,
-    connection_retries=10,
-    retry_delay=2
-)
-
-
-# ============================================================
-# GLOBALS
-# ============================================================
-
-DOWNLOAD_BOT_ID = None
-DOWNLOAD_BOT_ENTITY = None
-
-# الطلبات المنتظرة
-pending_youtube = {}
-
-# قفل بسيط
-youtube_lock = asyncio.Lock()
-
-
-# ============================================================
-# AUDIO CHECK
-# ============================================================
-
-def is_audio(message):
-
-    if not message:
-        return False
-
-    if message.audio:
-        return True
-
-    if message.voice:
-        return True
-
+async def initialize_bot():
+    global channel_media_messages
+    print("[INFO] جاري تخزين رسائل القناة للسرعة الفورية...")
     try:
-        if message.document:
-            mime = message.document.mime_type or ""
+        async for message in client.iter_messages(CHANNEL_USERNAME, limit=150):
+            if message.audio or message.voice or (message.document and message.document.mime_type and 'audio' in message.document.mime_type):
+                channel_media_messages.append(message)
+        print(f"[INFO] تم تخزين {len(channel_media_messages)} ملفاً من القناة بنجاح.")
+    except Exception as e:
+        print(f"[ERROR] خطأ أثناء جلب ملفات القناة: {e}")
 
-            if mime.startswith("audio/"):
-                return True
+@client.on(events.NewMessage(outgoing=True, incoming=True))
+async def handle_commands(event):
+    if not event.is_private:
+        return
 
-    except Exception:
-        pass
+    text_raw = event.raw_text.strip()
+    text_lower = text_raw.lower()
+    target_chat = event.chat_id
 
-    return False
+    # 1. أمر "غنيلي" (جلب عشوائي من القناة كملف أصلي وبدون وصف أو تحويل)
+    if text_raw == "غنيلي":
+        try:
+            await event.delete()
+        except Exception:
+            pass
 
-
-# ============================================================
-# MEDIA TYPE
-# ============================================================
-
-def media_type(message):
-
-    if message.audio:
-        return "AUDIO"
-
-    if message.voice:
-        return "VOICE"
-
-    if message.document:
-        return "DOCUMENT"
-
-    if message.video:
-        return "VIDEO"
-
-    if message.photo:
-        return "PHOTO"
-
-    return "TEXT"
-
-
-# ============================================================
-# DOWNLOAD BOT LISTENER
-#
-# هذا Listener عام وليس chats=...
-# حتى نضمن التقاط رسالة البوت.
-# ============================================================
-
-@client.on(
-    events.NewMessage(
-        incoming=True
-    )
-)
-async def download_bot_listener(event):
-
-    global DOWNLOAD_BOT_ID
-
-    try:
-
-        message = event.message
-
-        if not message:
+        if not channel_media_messages:
+            await client.send_message(target_chat, "عذراً، لم يتم العثور على ملفات صوتية في القناة حالياً.")
             return
 
-        sender_id = event.sender_id
-
-        # ----------------------------------------------------
-        # تجاهل أي رسالة ليست من بوت التحميل
-        # ----------------------------------------------------
-
-        if DOWNLOAD_BOT_ID is None:
-            return
-
-        if sender_id != DOWNLOAD_BOT_ID:
-            return
-
-        print("")
-        print("==================================================")
-        print("[BOT] وصلت رسالة من MsosMbot")
-        print(f"[BOT] Message ID : {message.id}")
-        print(f"[BOT] Type       : {media_type(message)}")
-        print(f"[BOT] Sender ID  : {sender_id}")
-
-        # ----------------------------------------------------
-        # إذا ليست Audio
-        # ----------------------------------------------------
-
-        if not is_audio(message):
-
-            print("[BOT] ليست رسالة صوتية.")
-            print("==================================================")
-
-            return
-
-        print("[BOT] تم العثور على ملف صوتي.")
-
-        # ----------------------------------------------------
-        # البحث عن طلب يوت منتظر
-        # ----------------------------------------------------
-
-        async with youtube_lock:
-
-            if not pending_youtube:
-
-                print(
-                    "[BOT] لا يوجد طلب يوت منتظر حاليًا."
-                )
-
-                print("==================================================")
-
-                return
-
-            # أخذ أقدم طلب
-            request_id = next(
-                iter(pending_youtube)
-            )
-
-            request = pending_youtube[
-                request_id
-            ]
-
-            target_chat = request["chat_id"]
-
-            started_at = request["started_at"]
-
-            # نحذفه فورًا حتى لا تتم معالجة نفس الطلب مرتين
-            del pending_youtube[
-                request_id
-            ]
-
-        # ----------------------------------------------------
-        # إرسال الصوت للخاص
-        #
-        # نستخدم message.media مباشرة:
-        # بدون Forward
-        # بدون Caption
-        # بدون تعديل الاسم
-        # بدون تعديل الفنان
-        # ----------------------------------------------------
-
-        print(
-            f"[BOT] الهدف: {target_chat}"
-        )
-
-        print(
-            "[BOT] جاري إرسال الملف إلى الخاص..."
-        )
-
-        send_start = time.monotonic()
+        selected_msg = random.choice(channel_media_messages)
 
         try:
+            # تحميل الملف مؤقتاً وإعادة إرساله كملف أصلي مستقل وبدون وصف تماماً
+            downloaded_path = await client.download_media(selected_msg)
+            
+            await client.send_file(
+                target_chat,
+                downloaded_path,
+                caption=""
+            )
+            
+            if downloaded_path and os.path.exists(downloaded_path):
+                os.remove(downloaded_path)
+
+        except Exception as e:
+            print(f"[ERROR] فشل إرسال ملف القناة: {e}")
+            try:
+                await client.forward_messages(target_chat, selected_msg)
+            except:
+                pass
+        return
+
+    # 2. أمر بحث اليوتيوب (يوت / يوتو) عبر بوت التحميل وإرساله كملف أصلي نظيف وبدون وصف
+    if text_lower.startswith("يوت ") or text_lower.startswith("يوتو "):
+        query = text_raw[4:].strip() if text_lower.startswith("يوت ") else text_raw[5:].strip()
+        if not query:
+            return
+
+        try:
+            await event.delete()
+        except Exception:
+            pass
+
+        try:
+            sent_msg = await client.send_message(DOWNLOAD_BOT, f"يوت {query}")
+            
+            audio_msg = None
+            for _ in range(25):
+                messages = await client.get_messages(DOWNLOAD_BOT, limit=6)
+                for msg in messages:
+                    if msg.id > sent_msg.id and (msg.audio or msg.voice or (msg.document and msg.file and msg.file.mime_type and 'audio' in msg.file.mime_type)):
+                        audio_msg = msg
+                        break
+                if audio_msg:
+                    break
+                await asyncio.sleep(0.3)
+
+            if not audio_msg:
+                print("[WARNING] لم يرد بوت التحميل بملف صوتي.")
+                return
+
+            # تحميل الملف الوارد من بوت التحميل وإرساله للخاص كملف أصلي بدون وصف
+            downloaded_file_path = await client.download_media(audio_msg)
 
             await client.send_file(
                 target_chat,
-                message.media,
-                caption=None,
-                force_document=False
+                downloaded_file_path,
+                caption=""
             )
 
-            send_time = (
-                time.monotonic()
-                - send_start
-            )
-
-            total_time = (
-                time.monotonic()
-                - started_at
-            )
-
-            print(
-                f"[BOT] تم الإرسال بنجاح."
-            )
-
-            print(
-                f"[BOT] زمن الإرسال: {send_time:.2f}s"
-            )
-
-            print(
-                f"[BOT] الزمن الكلي: {total_time:.2f}s"
-            )
-
-        except Exception as send_error:
-
-            print(
-                f"[BOT ERROR] فشل إرسال Media: "
-                f"{send_error}"
-            )
-
-        print("==================================================")
-        print("")
-
-    except Exception as e:
-
-        print(
-            f"[LISTENER ERROR] {e}"
-        )
-
-
-# ============================================================
-# GHANNILI
-# ============================================================
-
-async def ghannili(chat_id):
-
-    try:
-
-        print("[GHANNI] البحث عن أغنية...")
-
-        selected = None
-
-        # ----------------------------------------------------
-        # نبحث عن أول مجموعة ملفات صوتية
-        # ----------------------------------------------------
-
-        audio_messages = []
-
-        async for message in client.iter_messages(
-            CHANNEL_USERNAME,
-            limit=150
-        ):
-
-            if is_audio(message):
-
-                audio_messages.append(
-                    message
-                )
-
-        # ----------------------------------------------------
-        # لا توجد أغاني
-        # ----------------------------------------------------
-
-        if not audio_messages:
-
-            await client.send_message(
-                chat_id,
-                "ماكو ملفات صوتية بالقناة حاليًا."
-            )
-
-            print(
-                "[GHANNI] لا توجد ملفات صوتية."
-            )
-
-            return
-
-        # ----------------------------------------------------
-        # اختيار عشوائي
-        # ----------------------------------------------------
-
-        import random
-
-        selected = random.choice(
-            audio_messages
-        )
-
-        print(
-            f"[GHANNI] الرسالة المختارة: "
-            f"{selected.id}"
-        )
-
-        # ----------------------------------------------------
-        # إرسال مباشر
-        #
-        # بدون Forward
-        # بدون Caption
-        # بدون تعديل Metadata
-        # ----------------------------------------------------
-
-        await client.send_file(
-            chat_id,
-            selected.media,
-            caption=None
-        )
-
-        print(
-            "[GHANNI] تم الإرسال."
-        )
-
-    except Exception as e:
-
-        print(
-            f"[GHANNI ERROR] {e}"
-        )
-
-
-# ============================================================
-# YOUTUBE REQUEST
-# ============================================================
-
-async def youtube_request(
-    chat_id,
-    query
-):
-
-    request_id = (
-        f"{chat_id}_"
-        f"{time.time_ns()}"
-    )
-
-    started_at = time.monotonic()
-
-    try:
-
-        print("")
-        print("==================================================")
-        print(
-            f"[YT] البحث عن: {query}"
-        )
-
-        # ----------------------------------------------------
-        # مهم:
-        # نسجل الطلب قبل إرسال الرسالة للبوت.
-        # ----------------------------------------------------
-
-        async with youtube_lock:
-
-            pending_youtube[
-                request_id
-            ] = {
-                "chat_id": chat_id,
-                "query": query,
-                "started_at": started_at
-            }
-
-        print(
-            "[YT] تم تسجيل الطلب."
-        )
-
-        # ----------------------------------------------------
-        # إرسال الأمر إلى البوت
-        # ----------------------------------------------------
-
-        sent = await client.send_message(
-            DOWNLOAD_BOT_ENTITY,
-            f"يوت {query}"
-        )
-
-        print(
-            "[YT] تم إرسال الطلب للبوت."
-        )
-
-        print(
-            f"[YT] Message ID: {sent.id}"
-        )
-
-        print(
-            "[YT] أنتظر نتيجة البوت..."
-        )
-
-        # ----------------------------------------------------
-        # انتظار Listener
-        # ----------------------------------------------------
-
-        deadline = (
-            time.monotonic()
-            + YOUTUBE_TIMEOUT
-        )
-
-        while time.monotonic() < deadline:
-
-            async with youtube_lock:
-
-                if request_id not in pending_youtube:
-
-                    print(
-                        "[YT] تمت معالجة الأغنية."
-                    )
-
-                    print(
-                        "=================================================="
-                    )
-
-                    return
-
-            await asyncio.sleep(
-                0.05
-            )
-
-        # ----------------------------------------------------
-        # Timeout
-        # ----------------------------------------------------
-
-        async with youtube_lock:
-
-            pending_youtube.pop(
-                request_id,
-                None
-            )
-
-        print(
-            "[YT] انتهت المهلة."
-        )
-
-        print(
-            "[YT] البوت لم يرسل Audio يمكن التقاطه."
-        )
-
-        print(
-            "=================================================="
-        )
-
-    except Exception as e:
-
-        async with youtube_lock:
-
-            pending_youtube.pop(
-                request_id,
-                None
-            )
-
-        print(
-            f"[YT ERROR] {e}"
-        )
-
-        print(
-            "=================================================="
-        )
-
-
-# ============================================================
-# USER COMMANDS
-# ============================================================
-
-@client.on(
-    events.NewMessage(
-        incoming=True,
-        outgoing=True
-    )
-)
-async def command_handler(event):
-
-    try:
-
-        if not event.is_private:
-            return
-
-        text = (
-            event.raw_text
-            or ""
-        ).strip()
-
-        if not text:
-            return
-
-        chat_id = event.chat_id
-
-        text_lower = text.lower()
-
-        # ====================================================
-        # غنيلي
-        # ====================================================
-
-        if text == "غنيلي":
-
-            print(
-                "[COMMAND] غنيلي"
-            )
-
-            try:
-                await event.delete()
-            except Exception:
-                pass
-
-            # تشغيل بدون تعطيل Listener
-            asyncio.create_task(
-                ghannili(
-                    chat_id
-                )
-            )
-
-            return
-
-        # ====================================================
-        # يوت
-        # ====================================================
-
-        if text_lower.startswith("يوت "):
-
-            query = text[4:].strip()
-
-            if not query:
-                return
-
-            print(
-                f"[COMMAND] يوت {query}"
-            )
-
-            try:
-                await event.delete()
-            except Exception:
-                pass
-
-            asyncio.create_task(
-                youtube_request(
-                    chat_id,
-                    query
-                )
-            )
-
-            return
-
-        # ====================================================
-        # يوتو
-        # ====================================================
-
-        if text_lower.startswith("يوتو "):
-
-            query = text[5:].strip()
-
-            if not query:
-                return
-
-            print(
-                f"[COMMAND] يوتو {query}"
-            )
-
-            try:
-                await event.delete()
-            except Exception:
-                pass
-
-            asyncio.create_task(
-                youtube_request(
-                    chat_id,
-                    query
-                )
-            )
-
-            return
-
-    except Exception as e:
-
-        print(
-            f"[COMMAND ERROR] {e}"
-        )
-
-
-# ============================================================
-# MAIN
-# ============================================================
+            if downloaded_file_path and os.path.exists(downloaded_file_path):
+                os.remove(downloaded_file_path)
+
+        except Exception as e:
+            print(f"[ERROR] خطأ أثناء جلب الأغنية من بوت التحميل: {e}")
 
 async def main():
-
-    global DOWNLOAD_BOT_ID
-    global DOWNLOAD_BOT_ENTITY
-
-    print("")
-    print("==================================================")
-    print("[INFO] تشغيل اليوزربوت")
-    print("==================================================")
-
-    # --------------------------------------------------------
-    # الاتصال
-    # --------------------------------------------------------
-
+    print("[INFO] تشغيل اليوزر بوت بالشكل الأصلي النظيف...")
     await client.start()
-
-    print(
-        "[SUCCESS] تم الاتصال بتليجرام."
-    )
-
-    # --------------------------------------------------------
-    # الحصول على Entity للبوت
-    # --------------------------------------------------------
-
-    print(
-        "[INFO] جاري التعرف على MsosMbot..."
-    )
-
-    DOWNLOAD_BOT_ENTITY = await client.get_entity(
-        DOWNLOAD_BOT
-    )
-
-    DOWNLOAD_BOT_ID = (
-        DOWNLOAD_BOT_ENTITY.id
-    )
-
-    print(
-        "[SUCCESS] تم التعرف على البوت."
-    )
-
-    print(
-        f"[INFO] MsosMbot ID = "
-        f"{DOWNLOAD_BOT_ID}"
-    )
-
-    print(
-        f"[INFO] Channel = "
-        f"@{CHANNEL_USERNAME}"
-    )
-
-    print("")
-    print("==================================================")
-    print("[SUCCESS] اليوزربوت جاهز.")
-    print("[SUCCESS] Listener الخاص بـ MsosMbot يعمل.")
-    print("[SUCCESS] غنيلي يعمل.")
-    print("[SUCCESS] يوت يعمل.")
-    print("==================================================")
-    print("")
-
-    # --------------------------------------------------------
-    # التشغيل المستمر
-    # --------------------------------------------------------
-
+    await initialize_bot()
+    print("[SUCCESS] البوت يعمل بكامل السرعة والاستجابة الآن...")
     await client.run_until_disconnected()
 
-
-# ============================================================
-# START
-# ============================================================
-
 if __name__ == "__main__":
-
-    try:
-
-        asyncio.run(
-            main()
-        )
-
-    except KeyboardInterrupt:
-
-        print(
-            "[INFO] تم إيقاف البرنامج."
-        )
-
-    except Exception as e:
-
-        print(
-            f"[FATAL ERROR] {e}"
-        )
+    import asyncio
+    asyncio.run(main())
