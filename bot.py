@@ -31,8 +31,8 @@ async def initialize_bot(client):
             print(f"[ERROR] خطأ أثناء جلب ملفات القناة: {e}")
 
 def setup_handlers(client):
-    # إزالة شرط الحدث الخاص حتى يعمل في الخاص، المجموعات، والقنوات
-    @client.on(events.NewMessage(outgoing=True))
+    # الاستماع للرسائل الصادرة والواردة من أي شخص
+    @client.on(events.NewMessage(incoming=True, outgoing=True))
     async def handle_commands(event):
         text_raw = event.raw_text.strip()
         text_lower = text_raw.lower()
@@ -40,6 +40,7 @@ def setup_handlers(client):
 
         # 1. أمر "غنيلي"
         if text_raw == "غنيلي":
+            # محاولة حذف رسالة الشخص (إذا كانت الرسالة صادرة من حسابك، أو إذا كان الحساب يمتلك صلاحية الحذف في المجموعات/القنوات)
             try:
                 await event.delete()
             except Exception:
