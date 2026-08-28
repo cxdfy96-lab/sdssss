@@ -36,7 +36,7 @@ async def handle_commands(event):
     text_lower = text_raw.lower()
     target_chat = event.chat_id
 
-    # 1. أمر "غنيلي" (جلب عشوائي من القناة كملف أصلي وبدون وصف أو تحويل)
+    # 1. أمر "غنيلي" (سرعة صاروخية وبدون تحميل)
     if text_raw == "غنيلي":
         try:
             await event.delete()
@@ -50,18 +50,12 @@ async def handle_commands(event):
         selected_msg = random.choice(channel_media_messages)
 
         try:
-            # تحميل الملف مؤقتاً وإعادة إرساله كملف أصلي مستقل وبدون وصف تماماً
-            downloaded_path = await client.download_media(selected_msg)
-            
+            # إرسال الميديا مباشرة بدون تنزيل لضمان السرعة القصوى وثبات الاسم والفنان الأصلي وبدون وصف
             await client.send_file(
                 target_chat,
-                downloaded_path,
+                selected_msg.media,
                 caption=""
             )
-            
-            if downloaded_path and os.path.exists(downloaded_path):
-                os.remove(downloaded_path)
-
         except Exception as e:
             print(f"[ERROR] فشل إرسال ملف القناة: {e}")
             try:
@@ -70,7 +64,7 @@ async def handle_commands(event):
                 pass
         return
 
-    # 2. أمر بحث اليوتيوب (يوت / يوتو) عبر بوت التحميل وإرساله كملف أصلي نظيف وبدون وصف
+    # 2. أمر بحث اليوتيوب (يوت / يوتو) بسرعة البرق
     if text_lower.startswith("يوت ") or text_lower.startswith("يوتو "):
         query = text_raw[4:].strip() if text_lower.startswith("يوت ") else text_raw[5:].strip()
         if not query:
@@ -93,32 +87,27 @@ async def handle_commands(event):
                         break
                 if audio_msg:
                     break
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(0.2)
 
             if not audio_msg:
                 print("[WARNING] لم يرد بوت التحميل بملف صوتي.")
                 return
 
-            # تحميل الملف الوارد من بوت التحميل وإرساله للخاص كملف أصلي بدون وصف
-            downloaded_file_path = await client.download_media(audio_msg)
-
+            # إرسال ميديا الأغنية مباشرة للخاص بدون تنزيل للحفاظ على الاسم والفنان الأصلي وبدون وصف
             await client.send_file(
                 target_chat,
-                downloaded_file_path,
+                audio_msg.media,
                 caption=""
             )
-
-            if downloaded_file_path and os.path.exists(downloaded_file_path):
-                os.remove(downloaded_file_path)
 
         except Exception as e:
             print(f"[ERROR] خطأ أثناء جلب الأغنية من بوت التحميل: {e}")
 
 async def main():
-    print("[INFO] تشغيل اليوزر بوت بالشكل الأصلي النظيف...")
+    print("[INFO] تشغيل اليوزر بوت بأقصى سرعة ممكنة...")
     await client.start()
     await initialize_bot()
-    print("[SUCCESS] البوت يعمل بكامل السرعة والاستجابة الآن...")
+    print("[SUCCESS] البوت يعمل بكامل السرعة وبأسمائه الأصلية...")
     await client.run_until_disconnected()
 
 if __name__ == "__main__":
