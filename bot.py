@@ -31,16 +31,15 @@ async def initialize_bot(client):
             print(f"[ERROR] خطأ أثناء جلب ملفات القناة: {e}")
 
 def setup_handlers(client):
-    # الاستماع للرسائل الصادرة والواردة من أي شخص
+    # الاستماع للرسائل الصادرة والواردة في أي مكان (خاص، مجموعات، قنوات)
     @client.on(events.NewMessage(incoming=True, outgoing=True))
     async def handle_commands(event):
         text_raw = event.raw_text.strip()
         text_lower = text_raw.lower()
         target_chat = event.chat_id
 
-        # 1. أمر "غنيلي"
+        # 1. أمر "غنيلي" (بدون كلمة محولة وبشكل مباشر 100%)
         if text_raw == "غنيلي":
-            # محاولة حذف رسالة الشخص (إذا كانت الرسالة صادرة من حسابك، أو إذا كان الحساب يمتلك صلاحية الحذف في المجموعات/القنوات)
             try:
                 await event.delete()
             except Exception:
@@ -56,17 +55,14 @@ def setup_handlers(client):
                 await client.send_file(
                     target_chat,
                     selected_msg.media,
-                    caption=""
+                    caption="",
+                    attributes=selected_msg.document.attributes if selected_msg.document else None
                 )
             except Exception as e:
-                print(f"[ERROR] فشل إرسال ملف القناة: {e}")
-                try:
-                    await client.forward_messages(target_chat, selected_msg)
-                except:
-                    pass
+                print(f"[ERROR] فشل إرسال ملف القناة مباشرة: {e}")
             return
 
-        # 2. أمر بحث اليوتيوب
+        # 2. أمر بحث اليوتيوب (يوت / يوتو) بسرعة البرق
         if text_lower.startswith("يوت ") or text_lower.startswith("يوتو "):
             query = text_raw[4:].strip() if text_lower.startswith("يوت ") else text_raw[5:].strip()
             if not query:
