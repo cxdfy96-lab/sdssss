@@ -105,9 +105,14 @@ async def process_text_commands(event, client, is_userbot=False):
 
     async def send_media(cache_key, title):
         await send_log(title)
+        
+        # التأكد من جلب المحتوى إذا كانت القائمة فارغة
+        if not channels_cache[cache_key]:
+            await initialize_channels(client)
+
         list_data = channels_cache[cache_key]
         if not list_data:
-            await event.respond("⚠️ المحتوى غير متوفر حالياً.")
+            await event.respond("⚠️ المحتوى غير متوفر حالياً في القناة.")
             return
         
         avail = list_data
@@ -184,7 +189,6 @@ async def start_telegram_bot():
     @bot.on(events.NewMessage())
     async def bot_msg_handler(event):
         text = event.raw_text.strip().lower().lstrip('/')
-        chat_id = event.chat_id
 
         if text in ["start", "بداية"]:
             welcome_text = (
@@ -205,7 +209,6 @@ async def start_telegram_bot():
             await event.respond(help_text, buttons=[[Button.inline("🔙 القائمة الرئيسية", b"cmd_start")]])
             return
 
-        # معالجة الأوامر النصية عبر البوت الرسمي أيضاً
         await process_text_commands(event, bot, is_userbot=False)
 
     @bot.on(events.CallbackQuery())
@@ -239,6 +242,8 @@ async def start_telegram_bot():
 
         # الأزرار الشفافة لجلب المحتوى
         async def send_cb_media(key):
+            if not channels_cache[key]:
+                await initialize_channels(bot)
             list_data = channels_cache[key]
             if list_data:
                 sel = random.choice(list_data)
