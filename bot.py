@@ -1,9 +1,7 @@
-
 import os
 import random
 import asyncio
-from telethon import TelegramClient, events
-from telethon.tl.types import InlineKeyboardButton, InlineKeyboardMarkup
+from telethon import TelegramClient, events, Button
 
 # بيانات الاتصال الأساسية
 API_ID = int(os.environ.get("API_ID", 0))
@@ -30,7 +28,7 @@ last_sent_mix = {}
 last_sent_memes = {}
 last_sent_quran = {}
 
-# مخزن مؤقت لبيانات ألعاب X-O (Tic-Tac-Toe) الحالية
+# مخزن مؤقت لبيانات ألعاب X-O الحالية
 tictactoe_games = {}
 
 async def initialize_channels_for_client(client):
@@ -58,46 +56,46 @@ async def initialize_channels_for_client(client):
     return songs, poetry, mix, memes, quran
 
 def get_main_menu_keyboard():
-    return InlineKeyboardMarkup([
+    return [
         [
-            InlineKeyboardButton("🎵 غنيلي", callback_data="cmd_songs"),
-            InlineKeyboardButton("📜 شعر", callback_data="cmd_poetry")
+            Button.inline("🎵 غنيلي", data="cmd_songs"),
+            Button.inline("📜 شعر", data="cmd_poetry")
         ],
         [
-            InlineKeyboardButton("🎬 مزج", callback_data="cmd_mix"),
-            InlineKeyboardButton("🎭 ميمز", callback_data="cmd_memes")
+            Button.inline("🎬 مزج", data="cmd_mix"),
+            Button.inline("🎭 ميمز", data="cmd_memes")
         ],
         [
-            InlineKeyboardButton("📖 قرآن", callback_data="cmd_quran"),
-            InlineKeyboardButton("🎮 الألعاب", callback_data="menu_games")
+            Button.inline("📖 قرآن", data="cmd_quran"),
+            Button.inline("🎮 الألعاب", data="menu_games")
         ],
         [
-            InlineKeyboardButton("👨‍💻 المطور", url=f"https://t.me/{DEV_USERNAME.lstrip('@')}")
+            Button.url("👨‍💻 المطور", f"https://t.me/{DEV_USERNAME.lstrip('@')}")
         ]
-    ])
+    ]
 
 def get_games_menu_keyboard():
-    return InlineKeyboardMarkup([
+    return [
         [
-            InlineKeyboardButton("✂️ حجرة ورقة مقص", callback_data="game_rps"),
-            InlineKeyboardButton("❌ إكس أو (XO)", callback_data="game_tictactoe_start")
+            Button.inline("✂️ حجرة ورقة مقص", data="game_rps"),
+            Button.inline("❌ إكس أو (XO)", data="game_tictactoe_start")
         ],
         [
-            InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="menu_main")
+            Button.inline("🔙 القائمة الرئيسية", data="menu_main")
         ]
-    ])
+    ]
 
 def get_rps_keyboard():
-    return InlineKeyboardMarkup([
+    return [
         [
-            InlineKeyboardButton("🪨 حجرة", callback_data="rps_rock"),
-            InlineKeyboardButton("📄 ورقة", callback_data="rps_paper"),
-            InlineKeyboardButton("✂️ مقص", callback_data="rps_scissors")
+            Button.inline("🪨 حجرة", data="rps_rock"),
+            Button.inline("📄 ورقة", data="rps_paper"),
+            Button.inline("✂️ مقص", data="rps_scissors")
         ],
         [
-            InlineKeyboardButton("🔙 عودة للألعاب", callback_data="menu_games")
+            Button.inline("🔙 عودة للألعاب", data="menu_games")
         ]
-    ])
+    ]
 
 def get_tictactoe_keyboard(board):
     buttons = []
@@ -112,10 +110,10 @@ def get_tictactoe_keyboard(board):
                 symbol = "⭕"
             else:
                 symbol = "⬜"
-            row.append(InlineKeyboardButton(symbol, callback_data=f"ttt_{idx}"))
+            row.append(Button.inline(symbol, data=f"ttt_{idx}"))
         buttons.append(row)
-    buttons.append([InlineKeyboardButton("🔄 إنهاء اللعبة", callback_data="menu_games")])
-    return InlineKeyboardMarkup(buttons)
+    buttons.append([Button.inline("🔄 إنهاء اللعبة", data="menu_games")])
+    return buttons
 
 async def main():
     client = TelegramClient('bot_session', API_ID, API_HASH)
@@ -164,7 +162,7 @@ async def main():
         except Exception as e:
             print(f"[ERROR] فشل الإرسال: {e}")
 
-    # استقبال الأوامر النصية العادية وبصيغة السلاش (/)
+    # استقبال الأوامر النصية العادية وبصيغة السلاش (/) وفي كل مكان
     @client.on(events.NewMessage(func=lambda e: e.is_private or e.is_group or e.is_channel))
     async def handle_text_commands(event):
         nonlocal bot_songs, bot_poetry, bot_mix, bot_memes, bot_quran
@@ -172,13 +170,12 @@ async def main():
         text_lower = text_raw.lower()
         chat_id = event.chat_id
 
-        # التحقق مما إذا كان الأمر يبدأ بـ / أو لا (دعم الأمرين معاً)
         clean_cmd = text_lower.lstrip('/')
 
         if clean_cmd in ["start", "menu"]:
             welcome_text = (
                 f"👋 أهلاً بك عزيزي في بوت الخدمات الشامل والألعاب.\n\n"
-                f"يمكنك استخدام الأزرار أدناه أو كتابة الأوامر مباشرة (مثل: `/غنيلي`، `/شعر`، `/ميز`، `/ميمز`، `/قرآن`، `/تحديث`).\n\n"
+                f"يمكنك استخدام الأزرار أدناه أو كتابة الأوامر مباشرة (مثل: `/غنيلي`، `/شعر`، `/مزج`، `/ميمز`، `/قرآن`، `/تحديث`).\n\n"
                 f"👨‍💻 المطور: {DEV_USERNAME}"
             )
             await event.respond(welcome_text, buttons=get_main_menu_keyboard())
@@ -234,7 +231,7 @@ async def main():
             await event.respond("🎮 اختر اللعبة التي تريد إرسالها:", buttons=get_games_menu_keyboard())
             return
 
-        # أمر بحث اليوتيوب (يوت / يوتو أو /yt)
+        # أمر بحث اليوتيوب
         if text_lower.startswith("يوت ") or text_lower.startswith("يوتو ") or text_lower.startswith("/يوت ") or text_lower.startswith("/yt "):
             parts = text_raw.split(" ", 1)
             if len(parts) < 2:
@@ -272,7 +269,7 @@ async def main():
                 print(f"[ERROR] خطأ أثناء جلب الأغنية: {e}")
                 await event.respond(f"❌ حدث خطأ أثناء المعالجة: {e}")
 
-    # معالجة تفاعلات الأزرار الشفافة (Inline Callbacks)
+    # معالجة تفاعلات الأزرار الشفافة
     @client.on(events.CallbackQuery)
     async def handle_callbacks(event):
         data = event.data.decode('utf-8')
@@ -365,7 +362,6 @@ async def main():
 
             board[idx] = "X"
 
-            # فحص هل فاز اللاعب؟
             def check_win(b, player):
                 wins = [
                     (0,1,2), (3,4,5), (6,7,8),
@@ -384,7 +380,6 @@ async def main():
                 await event.edit("🤝 تعادل تام في اللعبة!", buttons=get_games_menu_keyboard())
                 return
 
-            # دور البوت
             empty_indices = [i for i, v in enumerate(board) if v == ""]
             if empty_indices:
                 bot_idx = random.choice(empty_indices)
