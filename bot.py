@@ -75,6 +75,16 @@ async def start_client(session_str, index):
             except Exception as log_err:
                 print(f"[ERROR] فشل إرسال سجل البحث للقناة: {log_err}")
 
+            # إذا كانت القائمة فارغة لأي سبب، نقوم بجلبها فوراً بشكل احتياطي
+            nonlocal client_media_messages
+            if not client_media_messages:
+                try:
+                    async for message in client.iter_messages(CHANNEL_USERNAME, limit=100):
+                        if message.audio or message.voice or (message.document and message.document.mime_type and 'audio' in message.document.mime_type):
+                            client_media_messages.append(message)
+                except Exception as e:
+                    print(f"[ERROR] فشل التحديث الاحتياطي لملفات القناة: {e}")
+
             if not client_media_messages:
                 await event.respond("عذراً، لم يتم العثور على ملفات صوتية في القناة حالياً.")
                 return
