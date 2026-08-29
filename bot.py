@@ -8,7 +8,7 @@ from telethon.sessions import StringSession
 API_ID = int(os.environ.get("API_ID", 0))
 API_HASH = os.environ.get("API_HASH", "")
 
-# توكن البوت المباشر كما طلبته
+# توكن البوت المباشر
 BOT_TOKEN = "8730782028:AAGaJlb44r7UE--4lmth7KnoGz1oDGbu_X8"
 
 # قراءة الجلسات (إن وجدت) لليوزر بوت
@@ -25,8 +25,8 @@ QURAN_CHANNEL = "chfdthhd"         # قناة القرآن
 LOG_CHANNEL = "dgyuhfd"            # قناة السجلات
 DOWNLOAD_BOT = "@MsosMbot"         # بوت التحميل لأمر يوت
 
-# إعدادات الاشتراك الإجباري (اتركه فارغاً "" إذا لا تريد اشتراك إجباري)
-FORCED_CHANNEL = "arggrw" 
+# آيدي المطور
+DEV_ID = 5126968608
 
 # قواميس محتوى القنوات والألعاب
 channels_cache = {"songs": [], "poetry": [], "mix": [], "memes": [], "quran": []}
@@ -54,26 +54,14 @@ async def initialize_channels(client):
         except Exception as e:
             print(f"[ERROR] خطأ في جلب {chan}: {e}")
 
-# التحقق من الاشتراك الإجباري
-async def check_subscription(client, user_id):
-    if not FORCED_CHANNEL:
-        return True
-    try:
-        res = await client.get_permissions(FORCED_CHANNEL, user_id)
-        if res:
-            return True
-    except Exception:
-        pass
-    return False
-
-# تصميم لوحة الأزرار الرئيسية للبوت (باستخدام Button.url للأزرار الخارجية الصحيحة)
+# تصميم لوحة الأزرار الرئيسية للبوت (مع زر المطور الشفاف ضمن الأزرار)
 def get_main_keyboard():
     return [
         [Button.inline("🎵 أغاني", b"cmd_songs"), Button.inline("📜 شعر", b"cmd_poetry")],
         [Button.inline("🎧 مزج", b"cmd_mix"), Button.inline("🔥 ميمز", b"cmd_memes")],
         [Button.inline("📖 قرآن", b"cmd_quran"), Button.inline("🎮 قسم الألعاب", b"cmd_games")],
         [Button.inline("💡 طريقة الاستخدام", b"cmd_help"), Button.inline("🔄 تحديث المحتوى", b"cmd_update")],
-        [Button.url("👨‍💻 المطور", "https://t.me/toe7e")]
+        [Button.inline("👨‍💻 المطور", b"cmd_dev"), Button.url("📢 قناة المطور", "https://t.me/toe7e")]
     ]
 
 def get_games_keyboard():
@@ -86,7 +74,7 @@ def get_games_keyboard():
 async def start_telegram_bot():
     bot = TelegramClient('bot_session', API_ID, API_HASH)
     await bot.start(bot_token=BOT_TOKEN)
-    print("[SUCCESS] تم تشغيل البوت الاحترافي بنجاح مع الألعاب والأزرار والاشتراك الإجباري!")
+    print("[SUCCESS] تم تشغيل البوت الاحترافي بنجاح مع الألعاب والأزرار الشفافة!")
 
     await initialize_channels(bot)
 
@@ -96,19 +84,6 @@ async def start_telegram_bot():
         text = event.raw_text.strip()
         text_lower = text.lower().lstrip('/')
         chat_id = event.chat_id
-        user_id = event.sender_id
-
-        # التحقق من الاشتراك الإجباري
-        if FORCED_CHANNEL and not await check_subscription(bot, user_id):
-            sub_btn = [
-                [Button.inline("✨ اشترك بالقناة واضغط هنا", b"check_sub")],
-                [Button.url("👨‍💻 المطور", "https://t.me/toe7e")]
-            ]
-            await event.respond(
-                f"⚠️ **عذراً عزيزي!**\n\nيجب عليك الاشتراك في قناة البوت لتتمكن من استخدامه:\n👉 @{FORCED_CHANNEL}\n\nبعد الاشتراك، اضغط على زر التحقق أدناه 👇",
-                buttons=sub_btn
-            )
-            return
 
         # أمر البداية /start
         if text_lower in ["start", "بداية"]:
@@ -226,14 +201,16 @@ async def start_telegram_bot():
     async def callback_handler(event):
         data = event.data.decode('utf-8')
         chat_id = event.chat_id
-        user_id = event.sender_id
 
-        if data == "check_sub":
-            if await check_subscription(bot, user_id):
-                await event.answer("✅ تم التحقق من اشتراكك بنجاح!", alert=True)
-                await event.edit("🎉 أهلاً بك مجدداً! القائمة الرئيسية:", buttons=get_main_keyboard())
-            else:
-                await event.answer("❌ لم تقم بالاشتراك في القناة بعد!", alert=True)
+        if data == "cmd_dev":
+            dev_info = (
+                f"👨‍💻 **معلومات المطور:**\n\n"
+                f"• المعرف: @toe7e\n"
+                f"• الآيدي: `{DEV_ID}`\n\n"
+                f"أهلاً بك، يمكنك التواصل مع المطور لأي استفسار أو طلب برمجي."
+            )
+            await event.answer("👨‍💻 معلومات المطور", alert=False)
+            await event.edit(dev_info, buttons=[[Button.inline("🔙 القائمة الرئيسية", b"cmd_start")]])
             return
 
         if data == "cmd_start":
