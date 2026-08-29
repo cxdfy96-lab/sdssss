@@ -8,7 +8,7 @@ from telethon.sessions import StringSession
 API_ID = int(os.environ.get("API_ID", 0))
 API_HASH = os.environ.get("API_HASH", "")
 
-# قراءة الجلسات من متغير البيئة SESSION_STRING (مفصولات بفاصلة ,)
+# قراءة الجلسات الأساسية من متغير البيئة SESSION_STRING
 SESSION_STRINGS_RAW = os.environ.get("SESSION_STRING", "")
 SESSIONS = [s.strip() for s in SESSION_STRINGS_RAW.split(",") if s.strip()]
 
@@ -44,7 +44,6 @@ async def initialize_channels_for_client(client):
     
     for chan, target_list in channels.items():
         try:
-            # وضع حد أقصى (مثلاً 200 رسالة) لضمان عدم تعليق البوت أثناء التشغيل
             async for message in client.iter_messages(chan, limit=200):
                 if message.text or message.media:
                     target_list.append(message)
@@ -54,6 +53,23 @@ async def initialize_channels_for_client(client):
 
     return songs, poetry, mix, memes, quran
 
+# دالة للتحقق مما إذا كان الحساب مشرفاً ولديه صلاحيات في المجموعة أو القناة
+async def check_admin_permission(client, event):
+    if event.is_private:
+        return True
+    
+    try:
+        chat = await event.get_chat()
+        if chat.megagroup or chat.broadcast or getattr(chat, 'forum', False):
+            me = await client.get_me()
+            participant = await client.get_permissions(chat, me.id)
+            if participant and (participant.is_admin or participant.is_creator):
+                return True
+    except Exception as e:
+        print(f"[ERROR] خطأ أثناء التحقق من الصلاحيات: {e}")
+    
+    return False
+
 async def start_client(session_str, index):
     client = TelegramClient(StringSession(session_str), API_ID, API_HASH)
     await client.start()
@@ -61,15 +77,49 @@ async def start_client(session_str, index):
     
     client_songs, client_poetry, client_mix, client_memes, client_quran = await initialize_channels_for_client(client)
     
-    # الاستماع للرسائل في المحادثات الخاصة
-    @client.on(events.NewMessage(incoming=True, func=lambda e: e.is_private))
+    # الاستماع لكافة الرسائل (الواردة والصادرة) لتعمل الأوامر سواء أرسلتها أنت أو غيرك
+    @client.on(events.NewMessage(incoming=True, outgoing=True))
     async def handle_commands(event):
         nonlocal client_songs, client_poetry, client_mix, client_memes, client_quran
         text_raw = event.raw_text.strip()
         text_lower = text_raw.lower()
         chat_id = event.chat_id
 
-        # أمر "تحديث" لإعادة تحميل القنوات يدوياً
+        # الحصول على معلومات الحساب الحالي
+        me = await client.get_me()
+
+        # 1. ميزة إضافة جلسة جديدة من المحفوظات (الرسائل المحفوظة حصراً)
+        # الطريقة: ترد على رسالة أو تكتب في المحفوظات: تنصيب [كود الجلسة] أو إضافة [كود الجلسة]
+        if event.is_private and event.sender_id == me.id and (text_raw.startswith("تنصيب ") or text_raw.startswith("إضافة ")):
+            parts = text_raw.split(" ", 1)
+            if len(parts) > 1:
+                new_session_str = parts[1].strip()
+                try:
+                    await event.delete()
+                except:
+                    pass
+                
+                status_msg = await client.send_message(chat_id, "⏳ جاري اختبار وتشغيل الجلسة الجديدة...")
+                try:
+                    temp_client = TelegramClient(StringSession(new_session_str), API_ID, API_HASH)
+                    await temp_client.connect()
+                    if await temp_client.is_user_authorized():
+                        asyncio.create_task(start_client(new_session_str, "الجديد"))
+                        await status_msg.edit("✅ تمت إضافة وتشغيل الجلسة بنجاح!")
+                    else:
+                        await status_msg.edit("❌ الجلسة غير صالحة أو غير مسجلة دخول.")
+                    await temp_client.disconnect()
+                except Exception as ex:
+                    await status_msg.edit(f"❌ فشل تنصيب الجلسة: {ex}")
+            return
+
+        # منع تنفيذ الأوامر في المجموعات أو القنوات إلا إذا كان الحساب مشرفاً وله صلاحيات
+        if not event.is_private:
+            is_allowed = await check_admin_permission(client, event)
+            if not is_allowed:
+                return
+
+        # 2. أمر "تحديث" لإعادة تحميل القنوات يدوياً
         if text_raw == "تحديث":
             try:
                 await event.delete()
@@ -143,42 +193,38 @@ async def start_client(session_str, index):
             except Exception as e:
                 print(f"[ERROR] فشل الإرسال: {e}")
 
-        # 1. أمر "غنيلي"
+        # 3. الأوامر الأساسية (غنيلي، شعر، مزج، ميمز، قرآن)
         if text_raw == "غنيلي":
             try: await event.delete()
             except: pass
             await send_random_media(client_songs, last_sent_songs, "غنيلي")
             return
 
-        # 2. أمر "اشعرلي" أو "شعر"
         if text_raw in ["اشعرلي", "شعر"]:
             try: await event.delete()
             except: pass
             await send_random_media(client_poetry, last_sent_poems, "شعر")
             return
 
-        # 3. أمر "مزج"
         if text_raw == "مزج":
             try: await event.delete()
             except: pass
             await send_random_media(client_mix, last_sent_mix, "مزج")
             return
 
-        # 4. أمر "ميمز"
         if text_raw == "ميمز":
             try: await event.delete()
             except: pass
             await send_random_media(client_memes, last_sent_memes, "ميمز")
             return
 
-        # 5. أمر "قرآن"
         if text_raw == "قرآن":
             try: await event.delete()
             except: pass
             await send_random_media(client_quran, last_sent_quran, "قرآن")
             return
 
-        # 6. أمر بحث اليوتيوب (يوت / يوتو)
+        # 4. أمر بحث اليوتيوب (يوت / يوتو)
         if text_lower.startswith("يوت ") or text_lower.startswith("يوتو "):
             query = text_raw[4:].strip() if text_lower.startswith("يوت ") else text_raw[5:].strip()
             if not query: return
