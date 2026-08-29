@@ -12,53 +12,58 @@ API_HASH = os.environ.get("API_HASH", "")
 SESSION_STRINGS_RAW = os.environ.get("SESSION_STRING", "")
 SESSIONS = [s.strip() for s in SESSION_STRINGS_RAW.split(",") if s.strip()]
 
-# 📌 ضع معرفات قنواتك هنا مباشرةً بكل سهولة:
-CHANNEL_USERNAME = "arggrw"          # قناة الأغاني القديمة (أمر غنيلي)
-POETRY_CHANNEL = "zfghjjg"    # قناة الشعر الجديدة (أمر اشعرلي / شعر)
-LOG_CHANNEL = "dgyuhfd"              # قناة إرسال سجلات البحث
-DOWNLOAD_BOT = "@MsosMbot"           # بوت التحميل لأمر يوت
+# 📌 معرفات القنوات والبوتات مباشرة داخل الكود:
+CHANNEL_USERNAME = "arggrw"        # قناة الأغاني (أمر غنيلي)
+POETRY_CHANNEL = "zfghjjg"         # قناة الشعر (أمر اشعرلي / شعر)
+MIX_CHANNEL = "cvbhfdgds"          # قناة المزج (أمر مزج)
+MEMES_CHANNEL = "cbklufswe"        # قناة الميمز (أمر ميمز)
+QURAN_CHANNEL = "chfdthhd"         # قناة القرآن (أمر قرآن)
+
+LOG_CHANNEL = "dgyuhfd"            # قناة إرسال سجلات البحث
+DOWNLOAD_BOT = "@MsosMbot"         # بوت التحميل لأمر يوت
 
 # قواميس لتتبع آخر الرسائل المرسلة لكل دردشة لضمان عدم تكرارها مباشرة
 last_sent_songs = {}
 last_sent_poems = {}
+last_sent_mix = {}
+last_sent_memes = {}
+last_sent_quran = {}
 
 async def initialize_channels_for_client(client):
-    songs_messages = []
-    poetry_messages = []
+    songs, poetry, mix, memes, quran = [], [], [], [], []
     
     print(f"[INFO] جاري جلب وتخزين محتوى القنوات...")
     
-    # جلب الأغاني من القناة القديمة
-    try:
-        async for message in client.iter_messages(CHANNEL_USERNAME, limit=None):
-            if message.media and (message.audio or message.voice or (message.document and message.document.mime_type and 'audio' in message.document.mime_type)):
-                songs_messages.append(message)
-        print(f"[INFO] تم جلب {len(songs_messages)} ملفاً صوتياً من قناة الأغاني.")
-    except Exception as e:
-        print(f"[ERROR] خطأ أثناء جلب قناة الأغاني: {e}")
+    channels = {
+        CHANNEL_USERNAME: songs,
+        POETRY_CHANNEL: poetry,
+        MIX_CHANNEL: mix,
+        MEMES_CHANNEL: memes,
+        QURAN_CHANNEL: quran
+    }
+    
+    for chan, target_list in channels.items():
+        try:
+            async for message in client.iter_messages(chan, limit=None):
+                if message.text or message.media:
+                    target_list.append(message)
+            print(f"[INFO] تم جلب {len(target_list)} رسالة من القناة: {chan}")
+        except Exception as e:
+            print(f"[ERROR] خطأ أثناء جلب القناة {chan}: {e}")
 
-    # جلب الشعر من القناة الجديدة
-    try:
-        async for message in client.iter_messages(POETRY_CHANNEL, limit=None):
-            if message.text or message.media:
-                poetry_messages.append(message)
-        print(f"[INFO] تم جلب {len(poetry_messages)} رسالة/قصيدة من قناة الشعر.")
-    except Exception as e:
-        print(f"[ERROR] خطأ أثناء جلب قناة الشعر: {e}")
-
-    return songs_messages, poetry_messages
+    return songs, poetry, mix, memes, quran
 
 async def start_client(session_str, index):
     client = TelegramClient(StringSession(session_str), API_ID, API_HASH)
     await client.start()
     print(f"[SUCCESS] تم تشغيل الحساب رقم {index} بنجاح!")
     
-    client_songs, client_poetry = await initialize_channels_for_client(client)
+    client_songs, client_poetry, client_mix, client_memes, client_quran = await initialize_channels_for_client(client)
     
     # الاستماع للرسائل في المحادثات الخاصة (Incoming & Outgoing)
     @client.on(events.NewMessage(incoming=True, outgoing=True, func=lambda e: e.is_private))
     async def handle_commands(event):
-        nonlocal client_songs, client_poetry
+        nonlocal client_songs, client_poetry, client_mix, client_memes, client_quran
         text_raw = event.raw_text.strip()
         text_lower = text_raw.lower()
         chat_id = event.chat_id
@@ -71,171 +76,119 @@ async def start_client(session_str, index):
                 pass
             
             try:
-                temp_songs, temp_poetry = [], []
-                async for message in client.iter_messages(CHANNEL_USERNAME, limit=None):
-                    if message.media and (message.audio or message.voice or (message.document and message.document.mime_type and 'audio' in message.document.mime_type)):
-                        temp_songs.append(message)
+                temp_s, temp_p, temp_m, temp_me, temp_q = [], [], [], [], []
                 
-                async for message in client.iter_messages(POETRY_CHANNEL, limit=None):
-                    if message.text or message.media:
-                        temp_poetry.append(message)
+                async for m in client.iter_messages(CHANNEL_USERNAME, limit=None):
+                    if m.text or m.media: temp_s.append(m)
+                async for m in client.iter_messages(POETRY_CHANNEL, limit=None):
+                    if m.text or m.media: temp_p.append(m)
+                async for m in client.iter_messages(MIX_CHANNEL, limit=None):
+                    if m.text or m.media: temp_m.append(m)
+                async for m in client.iter_messages(MEMES_CHANNEL, limit=None):
+                    if m.text or m.media: temp_me.append(m)
+                async for m in client.iter_messages(QURAN_CHANNEL, limit=None):
+                    if m.text or m.media: temp_q.append(m)
                 
-                if temp_songs:
-                    client_songs = temp_songs
-                if temp_poetry:
-                    client_poetry = temp_poetry
+                if temp_s: client_songs = temp_s
+                if temp_p: client_poetry = temp_p
+                if temp_m: client_mix = temp_m
+                if temp_me: client_memes = temp_me
+                if temp_q: client_quran = temp_q
                 
-                await client.send_message(chat_id, f"✅ تم تحديث القنوات بنجاح!\n🎵 الأغاني: {len(client_songs)}\n📜 الشعر والبصمات: {len(client_poetry)}")
+                await client.send_message(chat_id, f"✅ تم تحديث جميع القنوات بنجاح!")
             except Exception as e:
                 await client.send_message(chat_id, f"❌ حدث خطأ أثناء التحديث: {e}")
             return
 
-        # 1. أمر "غنيلي" (من قناة الأغاني)
+        # دالة مساعدة لإرسال السجلات
+        async def send_log(cmd_name):
+            try:
+                sender = await event.get_sender()
+                if sender:
+                    user_name = getattr(sender, 'first_name', 'مستخدم')
+                    user_username = f"@{sender.username}" if getattr(sender, 'username', None) else "لايوجد"
+                    user_id = sender.id
+                    
+                    log_text = (
+                        f"📁 **بحث جديد ({cmd_name})** [حساب {index}]\n\n"
+                        f"👤 الاسم: {user_name}\n"
+                        f"🆔 الأيدي: `{user_id}`\n"
+                        f"🔗 المعرف: {user_username}\n"
+                        f"💬 الرابط: tg://openmessage?user_id={user_id}"
+                    )
+                    await client.send_message(LOG_CHANNEL, log_text)
+            except Exception as log_err:
+                print(f"[ERROR] فشل إرسال السجل: {log_err}")
+
+        # دالة مساعدة للإرسال العشوائي بدون تكرار
+        async def send_random_media(messages_list, last_dict, cmd_title):
+            await send_log(cmd_title)
+            if not messages_list:
+                await event.respond("عذراً، المحتوى غير متوفر حالياً. أرسل 'تحديث' لإعادة التحميل.")
+                return
+
+            available = messages_list
+            if len(messages_list) > 1 and chat_id in last_dict:
+                available = [m for m in messages_list if m.id != last_dict[chat_id]]
+            
+            selected = random.choice(available)
+            last_dict[chat_id] = selected.id
+
+            try:
+                if selected.media:
+                    await client.send_file(chat_id, selected.media, caption=selected.text or "", parse_mode=None)
+                elif selected.text:
+                    await client.send_message(chat_id, selected.text)
+            except Exception as e:
+                print(f"[ERROR] فشل الإرسال: {e}")
+
+        # 1. أمر "غنيلي"
         if text_raw == "غنيلي":
-            try:
-                await event.delete()
-            except Exception:
-                pass
-
-            try:
-                sender = await event.get_sender()
-                if sender:
-                    user_name = getattr(sender, 'first_name', 'مستخدم')
-                    user_username = f"@{sender.username}" if getattr(sender, 'username', None) else "لايوجد"
-                    user_id = sender.id
-                    
-                    log_text = (
-                        f"🎵 **بحث جديد (غنيلي)** [حساب {index}]\n\n"
-                        f"👤 الاسم: {user_name}\n"
-                        f"🆔 الأيدي: `{user_id}`\n"
-                        f"🔗 المعرف: {user_username}\n"
-                        f"💬 الرابط: tg://openmessage?user_id={user_id}"
-                    )
-                    await client.send_message(LOG_CHANNEL, log_text)
-            except Exception as log_err:
-                print(f"[ERROR] فشل إرسال سجل البحث للقناة: {log_err}")
-
-            if not client_songs:
-                try:
-                    async for message in client.iter_messages(CHANNEL_USERNAME, limit=None):
-                        if message.media and (message.audio or message.voice or (message.document and message.document.mime_type and 'audio' in message.document.mime_type)):
-                            client_songs.append(message)
-                except Exception:
-                    pass
-
-            if not client_songs:
-                await event.respond("عذراً، لم يتم العثور على ملفات صوتية. أرسل 'تحديث' لإعادة تحميلها.")
-                return
-
-            available_songs = client_songs
-            if len(client_songs) > 1 and chat_id in last_sent_songs:
-                available_songs = [m for m in client_songs if m.id != last_sent_songs[chat_id]]
-            
-            selected_song = random.choice(available_songs)
-            last_sent_songs[chat_id] = selected_song.id
-
-            try:
-                await client.send_file(
-                    chat_id,
-                    selected_song.media,
-                    caption="",
-                    parse_mode=None
-                )
-            except Exception as e:
-                print(f"[ERROR] فشل إرسال الأغنية: {e}")
+            try: await event.delete()
+            except: pass
+            await send_random_media(client_songs, last_sent_songs, "غنيلي")
             return
 
-        # 2. أمر "اشعرلي" أو "شعر" (من قناة الشعر)
+        # 2. أمر "اشعرلي" أو "شعر"
         if text_raw in ["اشعرلي", "شعر"]:
-            try:
-                await event.delete()
-            except Exception:
-                pass
-
-            try:
-                sender = await event.get_sender()
-                if sender:
-                    user_name = getattr(sender, 'first_name', 'مستخدم')
-                    user_username = f"@{sender.username}" if getattr(sender, 'username', None) else "لايوجد"
-                    user_id = sender.id
-                    
-                    log_text = (
-                        f"📜 **بحث جديد (شعر)** [حساب {index}]\n\n"
-                        f"👤 الاسم: {user_name}\n"
-                        f"🆔 الأيدي: `{user_id}`\n"
-                        f"🔗 المعرف: {user_username}\n"
-                        f"💬 الرابط: tg://openmessage?user_id={user_id}"
-                    )
-                    await client.send_message(LOG_CHANNEL, log_text)
-            except Exception as log_err:
-                print(f"[ERROR] فشل إرسال سجل الشعر للقناة: {log_err}")
-
-            if not client_poetry:
-                try:
-                    async for message in client.iter_messages(POETRY_CHANNEL, limit=None):
-                        if message.text or message.media:
-                            client_poetry.append(message)
-                except Exception:
-                    pass
-
-            if not client_poetry:
-                await event.respond("عذراً، لم يتم العثور على قصائد أو بصمات شعرية. أرسل 'تحديث' لإعادة تحميلها.")
-                return
-
-            available_poetry = client_poetry
-            if len(client_poetry) > 1 and chat_id in last_sent_poems:
-                available_poetry = [m for m in client_poetry if m.id != last_sent_poems[chat_id]]
-            
-            selected_poem = random.choice(available_poetry)
-            last_sent_poems[chat_id] = selected_poem.id
-
-            try:
-                if selected_poem.media:
-                    await client.send_file(
-                        chat_id,
-                        selected_poem.media,
-                        caption=selected_poem.text or "",
-                        parse_mode=None
-                    )
-                elif selected_poem.text:
-                    await client.send_message(chat_id, selected_poem.text)
-            except Exception as e:
-                print(f"[ERROR] فشل إرسال الشعر: {e}")
+            try: await event.delete()
+            except: pass
+            await send_random_media(client_poetry, last_sent_poems, "شعر")
             return
 
-        # 3. أمر بحث اليوتيوب (يوت / يوتو)
+        # 3. أمر "مزج"
+        if text_raw == "مزج":
+            try: await event.delete()
+            except: pass
+            await send_random_media(client_mix, last_sent_mix, "مزج")
+            return
+
+        # 4. أمر "ميمز"
+        if text_raw == "ميمز":
+            try: await event.delete()
+            except: pass
+            await send_random_media(client_memes, last_sent_memes, "ميمز")
+            return
+
+        # 5. أمر "قرآن"
+        if text_raw == "قرآن":
+            try: await event.delete()
+            except: pass
+            await send_random_media(client_quran, last_sent_quran, "قرآن")
+            return
+
+        # 6. أمر بحث اليوتيوب (يوت / يوتو)
         if text_lower.startswith("يوت ") or text_lower.startswith("يوتو "):
             query = text_raw[4:].strip() if text_lower.startswith("يوت ") else text_raw[5:].strip()
-            if not query:
-                return
+            if not query: return
 
-            try:
-                await event.delete()
-            except Exception:
-                pass
+            try: await event.delete()
+            except: pass
 
-            try:
-                sender = await event.get_sender()
-                if sender:
-                    user_name = getattr(sender, 'first_name', 'مستخدم')
-                    user_username = f"@{sender.username}" if getattr(sender, 'username', None) else "لايوجد"
-                    user_id = sender.id
-                    
-                    log_text = (
-                        f"🔍 **بحث يوتيوب جديد** [حساب {index}]\n\n"
-                        f"📝 كلمة البحث: `{query}`\n"
-                        f"👤 الاسم: {user_name}\n"
-                        f"🆔 الأيدي: `{user_id}`\n"
-                        f"🔗 المعرف: {user_username}\n"
-                        f"💬 الرابط: tg://openmessage?user_id={user_id}"
-                    )
-                    await client.send_message(LOG_CHANNEL, log_text)
-            except Exception as log_err:
-                print(f"[ERROR] فشل إرسال سجل البحث للقناة: {log_err}")
+            await send_log(f"يوتيوب: {query}")
 
             try:
                 sent_msg = await client.send_message(DOWNLOAD_BOT, f"يوت {query}")
-                
                 audio_msg = None
                 for _ in range(30):
                     messages = await client.get_messages(DOWNLOAD_BOT, limit=6)
@@ -243,23 +196,16 @@ async def start_client(session_str, index):
                         if msg.id > sent_msg.id and (msg.audio or msg.voice or (msg.document and msg.file and msg.file.mime_type and 'audio' in msg.file.mime_type)):
                             audio_msg = msg
                             break
-                    if audio_msg:
-                        break
+                    if audio_msg: break
                     await asyncio.sleep(0.3)
 
                 if not audio_msg:
                     print("[WARNING] لم يرد بوت التحميل بملف صوتي.")
                     return
 
-                await client.send_file(
-                    chat_id,
-                    audio_msg.media,
-                    caption="",
-                    parse_mode=None
-                )
-
+                await client.send_file(chat_id, audio_msg.media, caption="", parse_mode=None)
             except Exception as e:
-                print(f"[ERROR] خطأ أثناء جلب الأغنية من بوت التحميل: {e}")
+                print(f"[ERROR] خطأ أثناء جلب الأغنية: {e}")
 
     return client
 
