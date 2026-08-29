@@ -1,4 +1,4 @@
-Import os
+import os
 import random
 import asyncio
 from telethon import TelegramClient, events
@@ -44,7 +44,8 @@ async def initialize_channels_for_client(client):
     
     for chan, target_list in channels.items():
         try:
-            async for message in client.iter_messages(chan, limit=None):
+            # وضع حد أقصى (مثلاً 200 رسالة) لضمان عدم تعليق البوت أثناء التشغيل
+            async for message in client.iter_messages(chan, limit=200):
                 if message.text or message.media:
                     target_list.append(message)
             print(f"[INFO] تم جلب {len(target_list)} رسالة من القناة: {chan}")
@@ -60,15 +61,15 @@ async def start_client(session_str, index):
     
     client_songs, client_poetry, client_mix, client_memes, client_quran = await initialize_channels_for_client(client)
     
-    # الاستماع للرسائل في المحادثات الخاصة (Incoming & Outgoing)
-    @client.on(events.NewMessage(incoming=True, outgoing=True, func=lambda e: e.is_private))
+    # الاستماع للرسائل في المحادثات الخاصة
+    @client.on(events.NewMessage(incoming=True, func=lambda e: e.is_private))
     async def handle_commands(event):
         nonlocal client_songs, client_poetry, client_mix, client_memes, client_quran
         text_raw = event.raw_text.strip()
         text_lower = text_raw.lower()
         chat_id = event.chat_id
 
-        # أمر "تحديث" لإعادة تحميل القنوات يدوياً من التليجرام فوراً
+        # أمر "تحديث" لإعادة تحميل القنوات يدوياً
         if text_raw == "تحديث":
             try:
                 await event.delete()
@@ -78,15 +79,15 @@ async def start_client(session_str, index):
             try:
                 temp_s, temp_p, temp_m, temp_me, temp_q = [], [], [], [], []
                 
-                async for m in client.iter_messages(CHANNEL_USERNAME, limit=None):
+                async for m in client.iter_messages(CHANNEL_USERNAME, limit=200):
                     if m.text or m.media: temp_s.append(m)
-                async for m in client.iter_messages(POETRY_CHANNEL, limit=None):
+                async for m in client.iter_messages(POETRY_CHANNEL, limit=200):
                     if m.text or m.media: temp_p.append(m)
-                async for m in client.iter_messages(MIX_CHANNEL, limit=None):
+                async for m in client.iter_messages(MIX_CHANNEL, limit=200):
                     if m.text or m.media: temp_m.append(m)
-                async for m in client.iter_messages(MEMES_CHANNEL, limit=None):
+                async for m in client.iter_messages(MEMES_CHANNEL, limit=200):
                     if m.text or m.media: temp_me.append(m)
-                async for m in client.iter_messages(QURAN_CHANNEL, limit=None):
+                async for m in client.iter_messages(QURAN_CHANNEL, limit=200):
                     if m.text or m.media: temp_q.append(m)
                 
                 if temp_s: client_songs = temp_s
