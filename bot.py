@@ -11,7 +11,7 @@ API_HASH = os.environ.get("API_HASH", "")
 # توكن البوت المباشر
 BOT_TOKEN = "8730782028:AAGaJlb44r7UE--4lmth7KnoGz1oDGbu_X8"
 
-# قراءة الجلسات لليوزر بوت
+# قراءة الجلسات لليوزر بوت (إن وجدت)
 SESSION_STRINGS_RAW = os.environ.get("SESSION_STRING", "")
 SESSIONS = [s.strip() for s in SESSION_STRINGS_RAW.split(",") if s.strip()]
 
@@ -29,7 +29,7 @@ DOWNLOAD_BOT = "@MsosMbot"         # بوت التحميل لأمر يوت
 DEV_ID = 5126968608
 DEV_USERNAME = "@toe7e"
 
-# قواميس محتوى القنوات والألعاب
+# ذاكرة تخزين المحتوى والألعاب
 channels_cache = {"songs": [], "poetry": [], "mix": [], "memes": [], "quran": []}
 last_sent = {}
 xo_games = {} 
@@ -55,7 +55,7 @@ async def initialize_channels(client):
         except Exception as e:
             print(f"[ERROR] خطأ في جلب {chan}: {e}")
 
-# لوحة الأزرار الرئيسية للبوت الرسمي
+# الأزرار الرئيسية للبوت
 def get_main_keyboard():
     return [
         [Button.inline("🎵 أغاني", b"cmd_songs"), Button.inline("📜 شعر", b"cmd_poetry")],
@@ -72,125 +72,94 @@ def get_games_keyboard():
         [Button.inline("🔙 القائمة الرئيسية", b"cmd_start")]
     ]
 
-# ----------------- معالج مشترك لأوامر النص (اليوزر بوت والبوت الرسمي) -----------------
-async def process_text_commands(event, client, is_userbot=False):
-    text_raw = event.raw_text.strip()
-    text_lower = text_raw.lower().lstrip('/')
-    chat_id = event.chat_id
+# إرسال السجلات للقناة المخصصة
+async def send_search_log(client, event, cmd_name):
+    try:
+        sender = await event.get_sender()
+        if sender:
+            user_name = getattr(sender, 'first_name', 'مستخدم')
+            user_username = f"@{sender.username}" if getattr(sender, 'username', None) else "لايوجد"
+            user_id = sender.id
+            log_text = (
+                f"📁 **بحث جديد ({cmd_name})**\n\n"
+                f"👤 الاسم: {user_name}\n"
+                f"🆔 الأيدي: `{user_id}`\n"
+                f"🔗 المعرف: {user_username}\n"
+                f"💬 الرابط: tg://openmessage?user_id={user_id}"
+            )
+            await client.send_message(LOG_CHANNEL, log_text)
+    except Exception as e:
+        print(f"[ERROR] Log error: {e}")
 
-    if is_userbot:
-        try:
-            await event.delete()
-        except:
-            pass
+# إرسال الوسائط عشوائياً بدون تكرار
+async def send_media_item(client, chat_id, cache_key, title, event=None):
+    if event:
+        await send_search_log(client, event, title)
 
-    # تسجيل الأنشطة
-    async def send_log(cmd_name):
-        try:
-            sender = await event.get_sender()
-            if sender:
-                user_name = getattr(sender, 'first_name', 'مستخدم')
-                user_username = f"@{sender.username}" if getattr(sender, 'username', None) else "لايوجد"
-                user_id = sender.id
-                log_text = (
-                    f"📁 **بحث جديد ({cmd_name})**\n\n"
-                    f"👤 الاسم: {user_name}\n"
-                    f"🆔 الأيدي: `{user_id}`\n"
-                    f"🔗 المعرف: {user_username}\n"
-                    f"💬 الرابط: tg://openmessage?user_id={user_id}"
-                )
-                await client.send_message(LOG_CHANNEL, log_text)
-        except Exception as e:
-            print(f"[ERROR] Log error: {e}")
-
-    async def send_media(cache_key, title):
-        await send_log(title)
-        
-        # التأكد من جلب المحتوى إذا كانت القائمة فارغة
-        if not channels_cache[cache_key]:
-            await initialize_channels(client)
-
-        list_data = channels_cache[cache_key]
-        if not list_data:
-            await event.respond("⚠️ المحتوى غير متوفر حالياً في القناة.")
-            return
-        
-        avail = list_data
-        if len(list_data) > 1 and chat_id in last_sent:
-            avail = [m for m in list_data if m.id != last_sent.get(chat_id)]
-        
-        selected = random.choice(avail)
-        last_sent[chat_id] = selected.id
-
-        try:
-            if selected.media:
-                await client.send_file(chat_id, selected.media, caption=selected.text or "", parse_mode=None)
-            elif selected.text:
-                await client.send_message(chat_id, selected.text)
-        except Exception as e:
-            print(f"[ERROR] Send error: {e}")
-
-    if text_lower in ["غنيلي"]:
-        await send_media("songs", "غنيلي")
-        return
-    if text_lower in ["شعر", "اشعرلي"]:
-        await send_media("poetry", "شعر")
-        return
-    if text_lower in ["مزج"]:
-        await send_media("mix", "مزج")
-        return
-    if text_lower in ["ميمز"]:
-        await send_media("memes", "ميمز")
-        return
-    if text_lower in ["قرآن"]:
-        await send_media("quran", "قرآن")
-        return
-    if text_lower in ["تحديث"]:
+    if not channels_cache[cache_key]:
         await initialize_channels(client)
-        await event.respond("✅ تم تحديث القنوات والمحتوى بنجاح!")
-        return
 
-    # أمر يوتيوب
-    if text_lower.startswith("يوت ") or text_lower.startswith("يوتو "):
-        query = text_lower[4:].strip() if text_lower.startswith("يوت ") else text_lower[5:].strip()
-        if not query: return
-        
-        await send_log(f"يوتيوب: {query}")
-        msg_w = await event.respond("🔍 جاري البحث والتحميل من اليوتيوب...")
-        try:
-            sent_msg = await client.send_message(DOWNLOAD_BOT, f"يوت {query}")
-            audio_msg = None
-            for _ in range(30):
-                messages = await client.get_messages(DOWNLOAD_BOT, limit=6)
-                for m in messages:
-                    if m.id > sent_msg.id and (m.audio or m.voice or (m.document and m.file and m.file.mime_type and 'audio' in m.file.mime_type)):
-                        audio_msg = m
-                        break
-                if audio_msg: break
-                await asyncio.sleep(0.3)
-
-            if audio_msg:
-                await client.send_file(chat_id, audio_msg.media)
-                await msg_w.delete()
-            else:
-                await msg_w.edit("❌ عذراً، لم يقم بوت التحميل بالرد.")
-        except Exception as e:
-            await msg_w.edit(f"❌ حدث خطأ: {e}")
+    list_data = channels_cache[cache_key]
+    if not list_data:
+        if event:
+            await event.respond("⚠️ المحتوى غير متوفر حالياً في القناة.")
         return
+    
+    avail = list_data
+    if len(list_data) > 1 and chat_id in last_sent:
+        avail = [m for m in list_data if m.id != last_sent.get(chat_id)]
+    
+    selected = random.choice(avail)
+    last_sent[chat_id] = selected.id
+
+    try:
+        if selected.media:
+            await client.send_file(chat_id, selected.media, caption=selected.text or "", parse_mode=None)
+        elif selected.text:
+            await client.send_message(chat_id, selected.text)
+    except Exception as e:
+        print(f"[ERROR] Send error: {e}")
+
+# معالجة أمر يوتيوب
+async def handle_youtube_search(client, event, query):
+    chat_id = event.chat_id
+    await send_search_log(client, event, f"يوتيوب: {query}")
+    msg_w = await event.respond("🔍 جاري البحث والتحميل من اليوتيوب...")
+    try:
+        sent_msg = await client.send_message(DOWNLOAD_BOT, f"يوت {query}")
+        audio_msg = None
+        for _ in range(30):
+            messages = await client.get_messages(DOWNLOAD_BOT, limit=6)
+            for m in messages:
+                if m.id > sent_msg.id and (m.audio or m.voice or (m.document and m.file and m.file.mime_type and 'audio' in m.file.mime_type)):
+                    audio_msg = m
+                    break
+            if audio_msg: break
+            await asyncio.sleep(0.3)
+
+        if audio_msg:
+            await client.send_file(chat_id, audio_msg.media)
+            await msg_w.delete()
+        else:
+            await msg_w.edit("❌ عذراً، لم يقم بوت التحميل بالرد.")
+    except Exception as e:
+        await msg_w.edit(f"❌ حدث خطأ: {e}")
 
 # ----------------- تشغيل بوت البوتفادر -----------------
 async def start_telegram_bot():
     bot = TelegramClient('bot_session', API_ID, API_HASH)
     await bot.start(bot_token=BOT_TOKEN)
-    print("[SUCCESS] تم تشغيل البوت الرسمي (BotFather) بنجاح مع الألعاب والأزرار!")
+    print("[SUCCESS] تم تشغيل البوت الرسمي (BotFather) بنجاح وبدون مشاكل!")
 
     await initialize_channels(bot)
 
     @bot.on(events.NewMessage())
     async def bot_msg_handler(event):
-        text = event.raw_text.strip().lower().lstrip('/')
+        text_raw = event.raw_text.strip()
+        text_lower = text_raw.lower().lstrip('/')
+        chat_id = event.chat_id
 
-        if text in ["start", "بداية"]:
+        if text_lower in ["start", "بداية"]:
             welcome_text = (
                 "👋 **أهلاً بك عزيزي في بوت الخدمات المتكاملة الاحترافي!**\n\n"
                 "🎵 يمكنني جلب الأغاني، الشعر، المزج، الميمز، القرآن، والبحث في اليوتيوب.\n"
@@ -200,7 +169,7 @@ async def start_telegram_bot():
             await event.respond(welcome_text, buttons=get_main_keyboard())
             return
 
-        if text in ["help", "تعليمات"]:
+        if text_lower in ["help", "تعليمات"]:
             help_text = (
                 "💡 **دليل استخدام البوت:**\n\n"
                 "• استخدم الأزرار الشفافة أو الأوامر العادية (`غنيلي`، `شعر`، `مزج`، `ميمز`، `قرآن`).\n"
@@ -209,7 +178,47 @@ async def start_telegram_bot():
             await event.respond(help_text, buttons=[[Button.inline("🔙 القائمة الرئيسية", b"cmd_start")]])
             return
 
-        await process_text_commands(event, bot, is_userbot=False)
+        # الأوامر المباشرة
+        if text_lower in ["غنيلي"]:
+            await send_media_item(bot, chat_id, "songs", "غنيلي", event)
+            return
+        if text_lower in ["شعر", "اشعرلي"]:
+            await send_media_item(bot, chat_id, "poetry", "شعر", event)
+            return
+        if text_lower in ["مزج"]:
+            await send_media_item(bot, chat_id, "mix", "مزج", event)
+            return
+        if text_lower in ["ميمز"]:
+            await send_media_item(bot, chat_id, "memes", "ميمز", event)
+            return
+        if text_lower in ["قرآن"]:
+            await send_media_item(bot, chat_id, "quran", "قرآن", event)
+            return
+        if text_lower in ["تحديث"]:
+            await initialize_channels(bot)
+            await event.respond("✅ تم تحديث القنوات والمحتوى بنجاح!")
+            return
+
+        if text_lower.startswith("يوت ") or text_lower.startswith("يوتو "):
+            query = text_lower[4:].strip() if text_lower.startswith("يوت ") else text_lower[5:].strip()
+            if query:
+                await handle_youtube_search(bot, event, query)
+            return
+
+        if text_lower == "xo":
+            game_id = f"{chat_id}_{event.sender_id}"
+            xo_games[game_id] = {
+                "board": [" 1️⃣ ", " 2️⃣ ", " 3️⃣ ", " 4️⃣ ", " 5️⃣ ", " 6️⃣ ", " 7️⃣ ", " 8️⃣ ", " 9️⃣ "],
+                "p1": event.sender_id, "p2": None, "turn": event.sender_id
+            }
+            b = xo_games[game_id]["board"]
+            kb = [
+                [Button.inline(b[0], f"xo_p_{game_id}_0"), Button.inline(b[1], f"xo_p_{game_id}_1"), Button.inline(b[2], f"xo_p_{game_id}_2")],
+                [Button.inline(b[3], f"xo_p_{game_id}_3"), Button.inline(b[4], f"xo_p_{game_id}_4"), Button.inline(b[5], f"xo_p_{game_id}_5")],
+                [Button.inline(b[6], f"xo_p_{game_id}_6"), Button.inline(b[7], f"xo_p_{game_id}_7"), Button.inline(b[8], f"xo_p_{game_id}_8")]
+            ]
+            await event.respond("❌ **لعبة XO (لاعب ضد لاعب)** ⭕\n\n- اللاعب الأول (❌) أنشأ اللعبة.\n- في انتظار انضمام اللاعب الثاني (⭕) بالضغط على أي خانة!", buttons=kb)
+            return
 
     @bot.on(events.CallbackQuery())
     async def callback_handler(event):
@@ -240,35 +249,25 @@ async def start_telegram_bot():
             await event.answer("✅ تمت التحديثات بنجاح!", alert=True)
             return
 
-        # الأزرار الشفافة لجلب المحتوى
-        async def send_cb_media(key):
-            if not channels_cache[key]:
-                await initialize_channels(bot)
-            list_data = channels_cache[key]
-            if list_data:
-                sel = random.choice(list_data)
-                if sel.media: await bot.send_file(chat_id, sel.media, caption=sel.text or "", parse_mode=None)
-                else: await bot.send_message(chat_id, sel.text)
-
         if data == "cmd_songs":
             await event.answer("🎵 جاري إرسال الأغنية...")
-            await send_cb_media("songs")
+            await send_media_item(bot, chat_id, "songs", "غنيلي")
             return
         if data == "cmd_poetry":
             await event.answer("📜 جاري إرسال الشعر...")
-            await send_cb_media("poetry")
+            await send_media_item(bot, chat_id, "poetry", "شعر")
             return
         if data == "cmd_mix":
             await event.answer("🎧 جاري إرسال المزج...")
-            await send_cb_media("mix")
+            await send_media_item(bot, chat_id, "mix", "مزج")
             return
         if data == "cmd_memes":
             await event.answer("🔥 جاري إرسال الميمز...")
-            await send_cb_media("memes")
+            await send_media_item(bot, chat_id, "memes", "ميمز")
             return
         if data == "cmd_quran":
             await event.answer("📖 جاري إرسال القرآن...")
-            await send_cb_media("quran")
+            await send_media_item(bot, chat_id, "quran", "قرآن")
             return
         if data == "cmd_games":
             await event.edit("🎮 **قسم الألعاب الجماعية:**\nاختر اللعبة:", buttons=get_games_keyboard())
@@ -311,7 +310,6 @@ async def start_telegram_bot():
             await event.answer("🎲 رمينا النرد!")
             return
 
-        # تفاعل XO لاعب ضد لاعب
         if data.startswith("xo_p_"):
             parts = data.split("_")
             game_id = f"{parts[3]}_{parts[4]}"
@@ -375,7 +373,32 @@ async def start_userbot(sess, idx):
     
     @client.on(events.NewMessage(incoming=True, outgoing=True, func=lambda e: e.is_private))
     async def ub_handler(event):
-        await process_text_commands(event, client, is_userbot=True)
+        text_raw = event.raw_text.strip()
+        text_lower = text_raw.lower().lstrip('/')
+        chat_id = event.chat_id
+
+        try:
+            await event.delete()
+        except:
+            pass
+
+        if text_lower in ["غنيلي"]:
+            await send_media_item(client, chat_id, "songs", "غنيلي", event)
+        elif text_lower in ["شعر", "اشعرلي"]:
+            await send_media_item(client, chat_id, "poetry", "شعر", event)
+        elif text_lower in ["مزج"]:
+            await send_media_item(client, chat_id, "mix", "مزج", event)
+        elif text_lower in ["ميمز"]:
+            await send_media_item(client, chat_id, "memes", "ميمز", event)
+        elif text_lower in ["قرآن"]:
+            await send_media_item(client, chat_id, "quran", "قرآن", event)
+        elif text_lower in ["تحديث"]:
+            await initialize_channels(client)
+            await client.send_message(chat_id, "✅ تم تحديث القنوات والمحتوى بنجاح!")
+        elif text_lower.startswith("يوت ") or text_lower.startswith("يوتو "):
+            query = text_lower[4:].strip() if text_lower.startswith("يوت ") else text_lower[5:].strip()
+            if query:
+                await handle_youtube_search(client, event, query)
 
     await client.run_until_disconnected()
 
