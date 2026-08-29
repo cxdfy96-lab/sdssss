@@ -25,7 +25,7 @@ QURAN_CHANNEL = "chfdthhd"         # قناة القرآن
 LOG_CHANNEL = "dgyuhfd"            # قناة السجلات
 DOWNLOAD_BOT = "@MsosMbot"         # بوت التحميل لأمر يوت
 
-# إعدادات الاشتراك الإجباري (ضع معرف قناتك هنا أو اتركه فارغاً للإلغاء مثل "")
+# إعدادات الاشتراك الإجباري (اتركه فارغاً "" إذا لا تريد اشتراك إجباري)
 FORCED_CHANNEL = "arggrw" 
 
 # قواميس محتوى القنوات والألعاب
@@ -66,14 +66,14 @@ async def check_subscription(client, user_id):
         pass
     return False
 
-# تصميم لوحة الأزرار الرئيسية للبوت
+# تصميم لوحة الأزرار الرئيسية للبوت (باستخدام Button.url للأزرار الخارجية الصحيحة)
 def get_main_keyboard():
     return [
         [Button.inline("🎵 أغاني", b"cmd_songs"), Button.inline("📜 شعر", b"cmd_poetry")],
         [Button.inline("🎧 مزج", b"cmd_mix"), Button.inline("🔥 ميمز", b"cmd_memes")],
         [Button.inline("📖 قرآن", b"cmd_quran"), Button.inline("🎮 قسم الألعاب", b"cmd_games")],
         [Button.inline("💡 طريقة الاستخدام", b"cmd_help"), Button.inline("🔄 تحديث المحتوى", b"cmd_update")],
-        [Button.inline("👨‍💻 المطور", url="https://t.me/toe7e")]
+        [Button.url("👨‍💻 المطور", "https://t.me/toe7e")]
     ]
 
 def get_games_keyboard():
@@ -93,10 +93,6 @@ async def start_telegram_bot():
     # معالجة الأوامر والرسائل
     @bot.on(events.NewMessage())
     async def handler(event):
-        if not event.is_private:
-            # يمكن تفعيل الألعاب والأوامر بالمجموعات أيضاً هنا
-            pass
-
         text = event.raw_text.strip()
         text_lower = text.lower().lstrip('/')
         chat_id = event.chat_id
@@ -104,7 +100,10 @@ async def start_telegram_bot():
 
         # التحقق من الاشتراك الإجباري
         if FORCED_CHANNEL and not await check_subscription(bot, user_id):
-            sub_btn = [[Button.inline("✨ اشترك بالقناة واضغط هنا", b"check_sub")], [Button.inline("👨‍💻 المطور", url="https://t.me/toe7e")]]
+            sub_btn = [
+                [Button.inline("✨ اشترك بالقناة واضغط هنا", b"check_sub")],
+                [Button.url("👨‍💻 المطور", "https://t.me/toe7e")]
+            ]
             await event.respond(
                 f"⚠️ **عذراً عزيزي!**\n\nيجب عليك الاشتراك في قناة البوت لتتمكن من استخدامه:\n👉 @{FORCED_CHANNEL}\n\nبعد الاشتراك، اضغط على زر التحقق أدناه 👇",
                 buttons=sub_btn
@@ -135,7 +134,7 @@ async def start_telegram_bot():
                 "• `يوت [اسم الأغنية]` : للبحث والتحميل من اليوتيوب.\n"
                 "• `تحديث` : لتحديث محتوى القنوات فوراً.\n\n"
                 "2️⃣ **الألعاب:**\n"
-                "• اكتب `xo` أو اذهب لقسم الألعاب للعب مع البوت أو الأصدقاء.\n"
+                "• اكتب `xo` أو اذهب لقسم الألعاب للعب مع البوت.\n"
                 "• ألعاب حجر ورقة مقص والنرد السريع."
             )
             await event.respond(help_text, buttons=[[Button.inline("🔙 القائمة الرئيسية", b"cmd_start")]])
@@ -222,7 +221,7 @@ async def start_telegram_bot():
             await event.respond("❌ **لعبة XO** ⭕\nدور اللاعب (❌): اختر خانة:", buttons=kb)
             return
 
-    # معالجة الأزرار التفاعلية (Inline Query Callbacks)
+    # معالجة الأزرار التفاعلية
     @bot.on(events.CallbackQuery())
     async def callback_handler(event):
         data = event.data.decode('utf-8')
@@ -348,7 +347,6 @@ async def start_telegram_bot():
             b = xo_boards[chat_id]
             if "️⃣" in b[idx]:
                 b[idx] = "❌"
-                # دور البوت البسيط
                 empty_spots = [i for i, x in enumerate(b) if "️⃣" in x]
                 if empty_spots:
                     bot_spot = random.choice(empty_spots)
@@ -367,8 +365,6 @@ async def start_telegram_bot():
 
 async def main():
     tasks = [start_telegram_bot()]
-    
-    # إذا كانت هناك جلسات يوزر بوت أيضاً تعمل في الخلفية
     if SESSIONS:
         async def start_userbot(sess, idx):
             client = TelegramClient(StringSession(sess), API_ID, API_HASH)
@@ -376,7 +372,6 @@ async def main():
             print(f"[SUCCESS] تم تشغيل اليوزر بوت رقم {idx}")
             @client.on(events.NewMessage(incoming=True, outgoing=True, func=lambda e: e.is_private))
             async def ub_handler(event):
-                # تفعيل الأوامر السريعة لليوزر بوت أيضاً إذا لزم
                 pass
             await client.run_until_disconnected()
 
