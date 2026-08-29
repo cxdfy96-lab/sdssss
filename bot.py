@@ -1,224 +1,389 @@
 import os
 import random
 import asyncio
-from telethon import TelegramClient, events
+from telethon import TelegramClient, events, Button
 from telethon.sessions import StringSession
 
 # بيانات الاتصال الأساسية
 API_ID = int(os.environ.get("API_ID", 0))
 API_HASH = os.environ.get("API_HASH", "")
 
-# قراءة الجلسات من متغير البيئة SESSION_STRING (مفصولات بفاصلة ,)
+# توكن البوت المباشر كما طلبته
+BOT_TOKEN = "8730782028:AAGaJlb44r7UE--4lmth7KnoGz1oDGbu_X8"
+
+# قراءة الجلسات (إن وجدت) لليوزر بوت
 SESSION_STRINGS_RAW = os.environ.get("SESSION_STRING", "")
 SESSIONS = [s.strip() for s in SESSION_STRINGS_RAW.split(",") if s.strip()]
 
-# 📌 معرفات القنوات والبوتات مباشرة داخل الكود:
-CHANNEL_USERNAME = "arggrw"        # قناة الأغاني (أمر غنيلي)
-POETRY_CHANNEL = "zfghjjg"         # قناة الشعر (أمر اشعرلي / شعر)
-MIX_CHANNEL = "cvbhfdgds"          # قناة المزج (أمر مزج)
-MEMES_CHANNEL = "cbklufswe"        # قناة الميمز (أمر ميمز)
-QURAN_CHANNEL = "chfdthhd"         # قناة القرآن (أمر قرآن)
+# 📌 معرفات القنوات والبوتات:
+CHANNEL_USERNAME = "arggrw"        # قناة الأغاني
+POETRY_CHANNEL = "zfghjjg"         # قناة الشعر
+MIX_CHANNEL = "cvbhfdgds"          # قناة المزج
+MEMES_CHANNEL = "cbklufswe"        # قناة الميمز
+QURAN_CHANNEL = "chfdthhd"         # قناة القرآن
 
-LOG_CHANNEL = "dgyuhfd"            # قناة إرسال سجلات البحث
+LOG_CHANNEL = "dgyuhfd"            # قناة السجلات
 DOWNLOAD_BOT = "@MsosMbot"         # بوت التحميل لأمر يوت
 
-# قواميس لتتبع آخر الرسائل المرسلة لكل دردشة لضمان عدم تكرارها مباشرة
-last_sent_songs = {}
-last_sent_poems = {}
-last_sent_mix = {}
-last_sent_memes = {}
-last_sent_quran = {}
+# إعدادات الاشتراك الإجباري (ضع معرف قناتك هنا أو اتركه فارغاً للإلغاء مثل "")
+FORCED_CHANNEL = "arggrw" 
 
-async def initialize_channels_for_client(client):
-    songs, poetry, mix, memes, quran = [], [], [], [], []
-    
+# قواميس محتوى القنوات والألعاب
+channels_cache = {"songs": [], "poetry": [], "mix": [], "memes": [], "quran": []}
+last_sent = {}
+xo_boards = {} # تتبع ألعاب XO
+
+async def initialize_channels(client):
+    global channels_cache
     print(f"[INFO] جاري جلب وتخزين محتوى القنوات...")
-    
-    channels = {
-        CHANNEL_USERNAME: songs,
-        POETRY_CHANNEL: poetry,
-        MIX_CHANNEL: mix,
-        MEMES_CHANNEL: memes,
-        QURAN_CHANNEL: quran
+    mapping = {
+        CHANNEL_USERNAME: "songs",
+        POETRY_CHANNEL: "poetry",
+        MIX_CHANNEL: "mix",
+        MEMES_CHANNEL: "memes",
+        QURAN_CHANNEL: "quran"
     }
-    
-    for chan, target_list in channels.items():
+    for chan, key in mapping.items():
+        temp = []
         try:
             async for message in client.iter_messages(chan, limit=None):
                 if message.text or message.media:
-                    target_list.append(message)
-            print(f"[INFO] تم جلب {len(target_list)} رسالة من القناة: {chan}")
+                    temp.append(message)
+            channels_cache[key] = temp
+            print(f"[INFO] تم جلب {len(temp)} رسالة من: {chan}")
         except Exception as e:
-            print(f"[ERROR] خطأ أثناء جلب القناة {chan}: {e}")
+            print(f"[ERROR] خطأ في جلب {chan}: {e}")
 
-    return songs, poetry, mix, memes, quran
+# التحقق من الاشتراك الإجباري
+async def check_subscription(client, user_id):
+    if not FORCED_CHANNEL:
+        return True
+    try:
+        res = await client.get_permissions(FORCED_CHANNEL, user_id)
+        if res:
+            return True
+    except Exception:
+        pass
+    return False
 
-async def start_client(session_str, index):
-    client = TelegramClient(StringSession(session_str), API_ID, API_HASH)
-    await client.start()
-    print(f"[SUCCESS] تم تشغيل الحساب رقم {index} بنجاح!")
-    
-    client_songs, client_poetry, client_mix, client_memes, client_quran = await initialize_channels_for_client(client)
-    
-    # الاستماع للرسائل في المحادثات الخاصة (Incoming & Outgoing)
-    @client.on(events.NewMessage(incoming=True, outgoing=True, func=lambda e: e.is_private))
-    async def handle_commands(event):
-        nonlocal client_songs, client_poetry, client_mix, client_memes, client_quran
-        text_raw = event.raw_text.strip()
-        text_lower = text_raw.lower()
+# تصميم لوحة الأزرار الرئيسية للبوت
+def get_main_keyboard():
+    return [
+        [Button.inline("🎵 أغاني", b"cmd_songs"), Button.inline("📜 شعر", b"cmd_poetry")],
+        [Button.inline("🎧 مزج", b"cmd_mix"), Button.inline("🔥 ميمز", b"cmd_memes")],
+        [Button.inline("📖 قرآن", b"cmd_quran"), Button.inline("🎮 قسم الألعاب", b"cmd_games")],
+        [Button.inline("💡 طريقة الاستخدام", b"cmd_help"), Button.inline("🔄 تحديث المحتوى", b"cmd_update")],
+        [Button.inline("👨‍💻 المطور", url="https://t.me/toe7e")]
+    ]
+
+def get_games_keyboard():
+    return [
+        [Button.inline("❌ لعبة XO ⭕", b"game_xo"), Button.inline("✂️ حجر ورقة مقص", b"game_rps")],
+        [Button.inline("🎲 نرد الحظ", b"game_dice"), Button.inline("🎯 رمي السهم", b"game_dart")],
+        [Button.inline("🔙 القائمة الرئيسية", b"cmd_start")]
+    ]
+
+async def start_telegram_bot():
+    bot = TelegramClient('bot_session', API_ID, API_HASH)
+    await bot.start(bot_token=BOT_TOKEN)
+    print("[SUCCESS] تم تشغيل البوت الاحترافي بنجاح مع الألعاب والأزرار والاشتراك الإجباري!")
+
+    await initialize_channels(bot)
+
+    # معالجة الأوامر والرسائل
+    @bot.on(events.NewMessage())
+    async def handler(event):
+        if not event.is_private:
+            # يمكن تفعيل الألعاب والأوامر بالمجموعات أيضاً هنا
+            pass
+
+        text = event.raw_text.strip()
+        text_lower = text.lower().lstrip('/')
         chat_id = event.chat_id
+        user_id = event.sender_id
 
-        # أمر "تحديث" لإعادة تحميل القنوات يدوياً من التليجرام فوراً
-        if text_raw == "تحديث":
-            try:
-                await event.delete()
-            except Exception:
-                pass
-            
-            try:
-                temp_s, temp_p, temp_m, temp_me, temp_q = [], [], [], [], []
-                
-                async for m in client.iter_messages(CHANNEL_USERNAME, limit=None):
-                    if m.text or m.media: temp_s.append(m)
-                async for m in client.iter_messages(POETRY_CHANNEL, limit=None):
-                    if m.text or m.media: temp_p.append(m)
-                async for m in client.iter_messages(MIX_CHANNEL, limit=None):
-                    if m.text or m.media: temp_m.append(m)
-                async for m in client.iter_messages(MEMES_CHANNEL, limit=None):
-                    if m.text or m.media: temp_me.append(m)
-                async for m in client.iter_messages(QURAN_CHANNEL, limit=None):
-                    if m.text or m.media: temp_q.append(m)
-                
-                if temp_s: client_songs = temp_s
-                if temp_p: client_poetry = temp_p
-                if temp_m: client_mix = temp_m
-                if temp_me: client_memes = temp_me
-                if temp_q: client_quran = temp_q
-                
-                await client.send_message(chat_id, f"✅ تم تحديث جميع القنوات بنجاح!")
-            except Exception as e:
-                await client.send_message(chat_id, f"❌ حدث خطأ أثناء التحديث: {e}")
+        # التحقق من الاشتراك الإجباري
+        if FORCED_CHANNEL and not await check_subscription(bot, user_id):
+            sub_btn = [[Button.inline("✨ اشترك بالقناة واضغط هنا", b"check_sub")], [Button.inline("👨‍💻 المطور", url="https://t.me/toe7e")]]
+            await event.respond(
+                f"⚠️ **عذراً عزيزي!**\n\nيجب عليك الاشتراك في قناة البوت لتتمكن من استخدامه:\n👉 @{FORCED_CHANNEL}\n\nبعد الاشتراك، اضغط على زر التحقق أدناه 👇",
+                buttons=sub_btn
+            )
             return
 
-        # دالة مساعدة لإرسال السجلات
-        async def send_log(cmd_name):
-            try:
-                sender = await event.get_sender()
-                if sender:
-                    user_name = getattr(sender, 'first_name', 'مستخدم')
-                    user_username = f"@{sender.username}" if getattr(sender, 'username', None) else "لايوجد"
-                    user_id = sender.id
-                    
-                    log_text = (
-                        f"📁 **بحث جديد ({cmd_name})** [حساب {index}]\n\n"
-                        f"👤 الاسم: {user_name}\n"
-                        f"🆔 الأيدي: `{user_id}`\n"
-                        f"🔗 المعرف: {user_username}\n"
-                        f"💬 الرابط: tg://openmessage?user_id={user_id}"
-                    )
-                    await client.send_message(LOG_CHANNEL, log_text)
-            except Exception as log_err:
-                print(f"[ERROR] فشل إرسال السجل: {log_err}")
+        # أمر البداية /start
+        if text_lower in ["start", "بداية"]:
+            welcome_text = (
+                "👋 **أهلاً بك عزيزي في بوت الخدمات المتكاملة الاحترافي!**\n\n"
+                "🎵 يمكنني جلب الأغاني، الشعر، المزج، الميمز، القرآن، والبحث في اليوتيوب.\n"
+                "🎮 بالإضافة إلى قسم ألعاب ممتع يعمل في كل مكان وبأزرار تفاعلية.\n\n"
+                "اختر ما تحب من الأزرار أدناه 👇"
+            )
+            await event.respond(welcome_text, buttons=get_main_keyboard())
+            return
 
-        # دالة مساعدة للإرسال العشوائي بدون تكرار
-        async def send_random_media(messages_list, last_dict, cmd_title):
-            await send_log(cmd_title)
-            if not messages_list:
-                await event.respond("عذراً، المحتوى غير متوفر حالياً. أرسل 'تحديث' لإعادة التحميل.")
+        # تعليمات الاستخدام
+        if text_lower in ["help", "تعليمات", "التعليمات"]:
+            help_text = (
+                "💡 **دليل استخدام البوت:**\n\n"
+                "1️⃣ **الأوامر العادية وبالسلاش (/):**\n"
+                "• `غنيلي` أو `/غنيلي` : لجلب أغنية عشوائية.\n"
+                "• `شعر` أو `/شعر` : لجلب قصيدة أو بصمة شعرية.\n"
+                "• `مزج` أو `/مزج` : لجلب مقطع مزج.\n"
+                "• `ميمز` أو `/ميمز` : لجلب ميمز مضحك.\n"
+                "• `قرآن` أو `/قرآن` : لجلب آيات وتلاوات قرآنية.\n"
+                "• `يوت [اسم الأغنية]` : للبحث والتحميل من اليوتيوب.\n"
+                "• `تحديث` : لتحديث محتوى القنوات فوراً.\n\n"
+                "2️⃣ **الألعاب:**\n"
+                "• اكتب `xo` أو اذهب لقسم الألعاب للعب مع البوت أو الأصدقاء.\n"
+                "• ألعاب حجر ورقة مقص والنرد السريع."
+            )
+            await event.respond(help_text, buttons=[[Button.inline("🔙 القائمة الرئيسية", b"cmd_start")]])
+            return
+
+        # دالة الإرسال للمحتوى
+        async def send_media_from_cache(cache_key, title):
+            list_data = channels_cache[cache_key]
+            if not list_data:
+                await event.respond("⚠️ المحتوى غير متوفر حالياً، جاري محاولة التحديث...")
                 return
-
-            available = messages_list
-            if len(messages_list) > 1 and chat_id in last_dict:
-                available = [m for m in messages_list if m.id != last_dict[chat_id]]
             
-            selected = random.choice(available)
-            last_dict[chat_id] = selected.id
+            avail = list_data
+            if len(list_data) > 1 and chat_id in last_sent:
+                avail = [m for m in list_data if m.id != last_sent.get(chat_id)]
+            
+            selected = random.choice(avail)
+            last_sent[chat_id] = selected.id
 
             try:
                 if selected.media:
-                    await client.send_file(chat_id, selected.media, caption=selected.text or "", parse_mode=None)
+                    await bot.send_file(chat_id, selected.media, caption=selected.text or "", parse_mode=None)
                 elif selected.text:
-                    await client.send_message(chat_id, selected.text)
+                    await bot.send_message(chat_id, selected.text)
             except Exception as e:
-                print(f"[ERROR] فشل الإرسال: {e}")
+                print(f"[ERROR] خطأ بالإرسال: {e}")
 
-        # 1. أمر "غنيلي"
-        if text_raw == "غنيلي":
-            try: await event.delete()
-            except: pass
-            await send_random_media(client_songs, last_sent_songs, "غنيلي")
+        if text_lower in ["غنيلي"]:
+            await send_media_from_cache("songs", "غنيلي")
+            return
+        if text_lower in ["شعر", "اشعرلي"]:
+            await send_media_from_cache("poetry", "شعر")
+            return
+        if text_lower in ["مزج"]:
+            await send_media_from_cache("mix", "مزج")
+            return
+        if text_lower in ["ميمز"]:
+            await send_media_from_cache("memes", "ميمز")
+            return
+        if text_lower in ["قرآن"]:
+            await send_media_from_cache("quran", "قرآن")
+            return
+        if text_lower in ["تحديث"]:
+            await initialize_channels(bot)
+            await event.respond("✅ تم تحديث القنوات والمحتوى بنجاح!")
             return
 
-        # 2. أمر "اشعرلي" أو "شعر"
-        if text_raw in ["اشعرلي", "شعر"]:
-            try: await event.delete()
-            except: pass
-            await send_random_media(client_poetry, last_sent_poems, "شعر")
-            return
-
-        # 3. أمر "مزج"
-        if text_raw == "مزج":
-            try: await event.delete()
-            except: pass
-            await send_random_media(client_mix, last_sent_mix, "مزج")
-            return
-
-        # 4. أمر "ميمز"
-        if text_raw == "ميمز":
-            try: await event.delete()
-            except: pass
-            await send_random_media(client_memes, last_sent_memes, "ميمز")
-            return
-
-        # 5. أمر "قرآن"
-        if text_raw == "قرآن":
-            try: await event.delete()
-            except: pass
-            await send_random_media(client_quran, last_sent_quran, "قرآن")
-            return
-
-        # 6. أمر بحث اليوتيوب (يوت / يوتو)
+        # أمر يوتيوب
         if text_lower.startswith("يوت ") or text_lower.startswith("يوتو "):
-            query = text_raw[4:].strip() if text_lower.startswith("يوت ") else text_raw[5:].strip()
+            query = text_lower[4:].strip() if text_lower.startswith("يوت ") else text_lower[5:].strip()
             if not query: return
-
-            try: await event.delete()
-            except: pass
-
-            await send_log(f"يوتيوب: {query}")
-
+            
+            msg_w = await event.respond("🔍 جاري البحث والتحميل من اليوتيوب...")
             try:
-                sent_msg = await client.send_message(DOWNLOAD_BOT, f"يوت {query}")
+                sent_msg = await bot.send_message(DOWNLOAD_BOT, f"يوت {query}")
                 audio_msg = None
                 for _ in range(30):
-                    messages = await client.get_messages(DOWNLOAD_BOT, limit=6)
-                    for msg in messages:
-                        if msg.id > sent_msg.id and (msg.audio or msg.voice or (msg.document and msg.file and msg.file.mime_type and 'audio' in msg.file.mime_type)):
-                            audio_msg = msg
+                    messages = await bot.get_messages(DOWNLOAD_BOT, limit=6)
+                    for m in messages:
+                        if m.id > sent_msg.id and (m.audio or m.voice or (m.document and m.file and m.file.mime_type and 'audio' in m.file.mime_type)):
+                            audio_msg = m
                             break
                     if audio_msg: break
                     await asyncio.sleep(0.3)
 
-                if not audio_msg:
-                    print("[WARNING] لم يرد بوت التحميل بملف صوتي.")
-                    return
-
-                await client.send_file(chat_id, audio_msg.media, caption="", parse_mode=None)
+                if audio_msg:
+                    await bot.send_file(chat_id, audio_msg.media)
+                    await msg_w.delete()
+                else:
+                    await msg_w.edit("❌ عذراً، لم يقم بوت التحميل بالرد.")
             except Exception as e:
-                print(f"[ERROR] خطأ أثناء جلب الأغنية: {e}")
+                await msg_w.edit(f"❌ حدث خطأ: {e}")
+            return
 
-    return client
+        # لعبة XO السريعة بالكتابة
+        if text_lower == "xo":
+            xo_boards[chat_id] = [" 1️⃣ ", " 2️⃣ ", " 3️⃣ ", " 4️⃣ ", " 5️⃣ ", " 6️⃣ ", " 7️⃣ ", " 8️⃣ ", " 9️⃣ "]
+            b = xo_boards[chat_id]
+            kb = [
+                [Button.inline(b[0], b"xo_0"), Button.inline(b[1], b"xo_1"), Button.inline(b[2], b"xo_2")],
+                [Button.inline(b[3], b"xo_3"), Button.inline(b[4], b"xo_4"), Button.inline(b[5], b"xo_5")],
+                [Button.inline(b[6], b"xo_6"), Button.inline(b[7], b"xo_7"), Button.inline(b[8], b"xo_8")]
+            ]
+            await event.respond("❌ **لعبة XO** ⭕\nدور اللاعب (❌): اختر خانة:", buttons=kb)
+            return
+
+    # معالجة الأزرار التفاعلية (Inline Query Callbacks)
+    @bot.on(events.CallbackQuery())
+    async def callback_handler(event):
+        data = event.data.decode('utf-8')
+        chat_id = event.chat_id
+        user_id = event.sender_id
+
+        if data == "check_sub":
+            if await check_subscription(bot, user_id):
+                await event.answer("✅ تم التحقق من اشتراكك بنجاح!", alert=True)
+                await event.edit("🎉 أهلاً بك مجدداً! القائمة الرئيسية:", buttons=get_main_keyboard())
+            else:
+                await event.answer("❌ لم تقم بالاشتراك في القناة بعد!", alert=True)
+            return
+
+        if data == "cmd_start":
+            await event.edit("📌 القائمة الرئيسية للبوت:", buttons=get_main_keyboard())
+            return
+        if data == "cmd_help":
+            help_text = "💡 **دليل الاستخدام:**\nاستخدم الأزرار أدناه أو اكتب الأوامر (غنيلي، شعر، مزج، ميمز، قرآن، يوت)."
+            await event.edit(help_text, buttons=[[Button.inline("🔙 رجوع", b"cmd_start")]])
+            return
+        if data == "cmd_update":
+            await initialize_channels(bot)
+            await event.answer("✅ تمت التحديثات بنجاح!", alert=True)
+            return
+        if data == "cmd_songs":
+            await event.answer("🎵 جاري إرسال الأغنية...")
+            list_data = channels_cache["songs"]
+            if list_data:
+                sel = random.choice(list_data)
+                await bot.send_file(chat_id, sel.media, caption=sel.text or "", parse_mode=None)
+            return
+        if data == "cmd_poetry":
+            await event.answer("📜 جاري إرسال الشعر...")
+            list_data = channels_cache["poetry"]
+            if list_data:
+                sel = random.choice(list_data)
+                if sel.media: await bot.send_file(chat_id, sel.media, caption=sel.text or "", parse_mode=None)
+                else: await bot.send_message(chat_id, sel.text)
+            return
+        if data == "cmd_mix":
+            await event.answer("🎧 جاري إرسال المزج...")
+            list_data = channels_cache["mix"]
+            if list_data:
+                sel = random.choice(list_data)
+                if sel.media: await bot.send_file(chat_id, sel.media, caption=sel.text or "", parse_mode=None)
+                else: await bot.send_message(chat_id, sel.text)
+            return
+        if data == "cmd_memes":
+            await event.answer("🔥 جاري إرسال الميمز...")
+            list_data = channels_cache["memes"]
+            if list_data:
+                sel = random.choice(list_data)
+                if sel.media: await bot.send_file(chat_id, sel.media, caption=sel.text or "", parse_mode=None)
+                else: await bot.send_message(chat_id, sel.text)
+            return
+        if data == "cmd_quran":
+            await event.answer("📖 جاري إرسال القرآن...")
+            list_data = channels_cache["quran"]
+            if list_data:
+                sel = random.choice(list_data)
+                if sel.media: await bot.send_file(chat_id, sel.media, caption=sel.text or "", parse_mode=None)
+                else: await bot.send_message(chat_id, sel.text)
+            return
+        if data == "cmd_games":
+            await event.edit("🎮 **قسم الألعاب الترفيهية:**\nاختر اللعبة التي تريدها:", buttons=get_games_keyboard())
+            return
+
+        # لوحة الألعاب
+        if data == "game_xo":
+            xo_boards[chat_id] = [" 1️⃣ ", " 2️⃣ ", " 3️⃣ ", " 4️⃣ ", " 5️⃣ ", " 6️⃣ ", " 7️⃣ ", " 8️⃣ ", " 9️⃣ "]
+            b = xo_boards[chat_id]
+            kb = [
+                [Button.inline(b[0], b"xo_0"), Button.inline(b[1], b"xo_1"), Button.inline(b[2], b"xo_2")],
+                [Button.inline(b[3], b"xo_3"), Button.inline(b[4], b"xo_4"), Button.inline(b[5], b"xo_5")],
+                [Button.inline(b[6], b"xo_6"), Button.inline(b[7], b"xo_7"), Button.inline(b[8], b"xo_8")]
+            ]
+            await event.edit("❌ **لعبة XO** ⭕\nدور اللاعب (❌): اختر خانة:", buttons=kb)
+            return
+
+        if data == "game_rps":
+            kb = [
+                [Button.inline("🪨 حجر", b"rps_stone"), Button.inline("📄 ورقة", b"rps_paper"), Button.inline("✂️ مقص", b"rps_scissor")],
+                [Button.inline("🔙 رجوع للألعاب", b"cmd_games")]
+            ]
+            await event.edit("✂️ **حجر ورقة مقص**\nاختر سلاحك:", buttons=kb)
+            return
+
+        if data.startswith("rps_"):
+            user_choice = data.split("_")[1]
+            bot_choice = random.choice(["stone", "paper", "scissor"])
+            emojis = {"stone": "🪨 حجر", "paper": "📄 ورقة", "scissor": "✂️ مقص"}
+            
+            if user_choice == bot_choice:
+                res = "🤝 تعادل!"
+            elif (user_choice == "stone" and bot_choice == "scissor") or \
+                 (user_choice == "paper" and bot_choice == "stone") or \
+                 (user_choice == "scissor" and bot_choice == "paper"):
+                res = "🎉 مبروك، لقد فزت!"
+            else:
+                res = "😢 هها، لقد فزت عليك!"
+            
+            text_res = f"👤 اختيارك: {emojis[user_choice]}\n🤖 اختيار البوت: {emojis[bot_choice]}\n\n{res}"
+            kb = [[Button.inline("🔄 اللعب مجدداً", b"game_rps"), Button.inline("🔙 الألعاب", b"cmd_games")]]
+            await event.edit(text_res, buttons=kb)
+            return
+
+        if data == "game_dice":
+            await bot.send_dice(chat_id, emoji="🎲")
+            await event.answer("🎲 رمينا النرد لك!")
+            return
+        if data == "game_dart":
+            await bot.send_dice(chat_id, emoji="🎯")
+            await event.answer("🎯 رمينا السهم لك!")
+            return
+
+        # تفاعل أزرار XO
+        if data.startswith("xo_"):
+            idx = int(data.split("_")[1])
+            if chat_id not in xo_boards:
+                xo_boards[chat_id] = [" 1️⃣ ", " 2️⃣ ", " 3️⃣ ", " 4️⃣ ", " 5️⃣ ", " 6️⃣ ", " 7️⃣ ", " 8️⃣ ", " 9️⃣ "]
+            
+            b = xo_boards[chat_id]
+            if "️⃣" in b[idx]:
+                b[idx] = "❌"
+                # دور البوت البسيط
+                empty_spots = [i for i, x in enumerate(b) if "️⃣" in x]
+                if empty_spots:
+                    bot_spot = random.choice(empty_spots)
+                    b[bot_spot] = "⭕"
+                
+                kb = [
+                    [Button.inline(b[0], b"xo_0"), Button.inline(b[1], b"xo_1"), Button.inline(b[2], b"xo_2")],
+                    [Button.inline(b[3], b"xo_3"), Button.inline(b[4], b"xo_4"), Button.inline(b[5], b"xo_5")],
+                    [Button.inline(b[6], b"xo_6"), Button.inline(b[7], b"xo_7"), Button.inline(b[8], b"xo_8")]
+                ]
+                await event.edit("❌ **لعبة XO** ⭕", buttons=kb)
+            else:
+                await event.answer("⚠️ هذه الخانة محجوزة مسبقاً!", alert=True)
+
+    await bot.run_until_disconnected()
 
 async def main():
-    if not SESSIONS:
-        print("[ERROR] لم يتم العثور على أي جلسات في متغير SESSION_STRING")
-        return
-
-    print(f"[INFO] جاري تشغيل {len(SESSIONS)} حسابات من متغيرات البيئة...")
-    tasks = [start_client(sess, i+1) for i, sess in enumerate(SESSIONS)]
-    clients = await asyncio.gather(*tasks)
+    tasks = [start_telegram_bot()]
     
-    await asyncio.gather(*(client.run_until_disconnected() for client in clients))
+    # إذا كانت هناك جلسات يوزر بوت أيضاً تعمل في الخلفية
+    if SESSIONS:
+        async def start_userbot(sess, idx):
+            client = TelegramClient(StringSession(sess), API_ID, API_HASH)
+            await client.start()
+            print(f"[SUCCESS] تم تشغيل اليوزر بوت رقم {idx}")
+            @client.on(events.NewMessage(incoming=True, outgoing=True, func=lambda e: e.is_private))
+            async def ub_handler(event):
+                # تفعيل الأوامر السريعة لليوزر بوت أيضاً إذا لزم
+                pass
+            await client.run_until_disconnected()
+
+        for i, s in enumerate(SESSIONS):
+            tasks.append(start_userbot(s, i+1))
+
+    await asyncio.gather(*tasks)
 
 if __name__ == "__main__":
     asyncio.run(main())
