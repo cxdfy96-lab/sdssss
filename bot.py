@@ -12,13 +12,11 @@ API_HASH = os.environ.get("API_HASH", "")
 SESSION_STRINGS_RAW = os.environ.get("SESSION_STRING", "")
 SESSIONS = [s.strip() for s in SESSION_STRINGS_RAW.split(",") if s.strip()]
 
-# إعدادات القنوات والبوتات
-CHANNEL_USERNAME = "arggrw"        # قناة الأغاني القديمة (أمر غنيلي)
-POETRY_CHANNEL = "poetry_channel"  # استبدل هذا بمعرف قناة الشعر الجديدة الخاصة بك
-DOWNLOAD_BOT = "@MsosMbot"
-
-# القناة التي سيتم إرسال عمليات البحث إليها
-LOG_CHANNEL = "dgyuhfd"
+# 📌 ضع معرفات قنواتك هنا مباشرةً بكل سهولة:
+CHANNEL_USERNAME = "arggrw"          # قناة الأغاني القديمة (أمر غنيلي)
+POETRY_CHANNEL = "zfghjjg"    # قناة الشعر الجديدة (أمر اشعرلي / شعر)
+LOG_CHANNEL = "dgyuhfd"              # قناة إرسال سجلات البحث
+DOWNLOAD_BOT = "@MsosMbot"           # بوت التحميل لأمر يوت
 
 # قواميس لتتبع آخر الرسائل المرسلة لكل دردشة لضمان عدم تكرارها مباشرة
 last_sent_songs = {}
@@ -39,7 +37,7 @@ async def initialize_channels_for_client(client):
     except Exception as e:
         print(f"[ERROR] خطأ أثناء جلب قناة الأغاني: {e}")
 
-    # جلب الشعر من القناة الجديدة (يدعم الصوتيات أو الرسائل النصية والوسائط)
+    # جلب الشعر من القناة الجديدة
     try:
         async for message in client.iter_messages(POETRY_CHANNEL, limit=None):
             if message.text or message.media:
@@ -57,7 +55,7 @@ async def start_client(session_str, index):
     
     client_songs, client_poetry = await initialize_channels_for_client(client)
     
-    # الاستماع للرسائل في المحادثات الخاصة
+    # الاستماع للرسائل في المحادثات الخاصة (Incoming & Outgoing)
     @client.on(events.NewMessage(incoming=True, outgoing=True, func=lambda e: e.is_private))
     async def handle_commands(event):
         nonlocal client_songs, client_poetry
@@ -65,7 +63,7 @@ async def start_client(session_str, index):
         text_lower = text_raw.lower()
         chat_id = event.chat_id
 
-        # أمر "تحديث" لإعادة تحميل القناتين يدوياً
+        # أمر "تحديث" لإعادة تحميل القنوات يدوياً من التليجرام فوراً
         if text_raw == "تحديث":
             try:
                 await event.delete()
@@ -87,12 +85,12 @@ async def start_client(session_str, index):
                 if temp_poetry:
                     client_poetry = temp_poetry
                 
-                await client.send_message(chat_id, f"✅ تم التحديث بنجاح!\n🎵 الأغاني: {len(client_songs)}\n📜 الشعر: {len(client_poetry)}")
+                await client.send_message(chat_id, f"✅ تم تحديث القنوات بنجاح!\n🎵 الأغاني: {len(client_songs)}\n📜 الشعر والبصمات: {len(client_poetry)}")
             except Exception as e:
                 await client.send_message(chat_id, f"❌ حدث خطأ أثناء التحديث: {e}")
             return
 
-        # 1. أمر "غنيلي" (من قناة الأغاني القديمة)
+        # 1. أمر "غنيلي" (من قناة الأغاني)
         if text_raw == "غنيلي":
             try:
                 await event.delete()
@@ -118,7 +116,15 @@ async def start_client(session_str, index):
                 print(f"[ERROR] فشل إرسال سجل البحث للقناة: {log_err}")
 
             if not client_songs:
-                await event.respond("عذراً، لم يتم العثور على ملفات صوتية في قناة الأغاني حالياً. أرسل 'تحديث' لإعادة التحميل.")
+                try:
+                    async for message in client.iter_messages(CHANNEL_USERNAME, limit=None):
+                        if message.media and (message.audio or message.voice or (message.document and message.document.mime_type and 'audio' in message.document.mime_type)):
+                            client_songs.append(message)
+                except Exception:
+                    pass
+
+            if not client_songs:
+                await event.respond("عذراً، لم يتم العثور على ملفات صوتية. أرسل 'تحديث' لإعادة تحميلها.")
                 return
 
             available_songs = client_songs
@@ -139,7 +145,7 @@ async def start_client(session_str, index):
                 print(f"[ERROR] فشل إرسال الأغنية: {e}")
             return
 
-        # 2. أمر "اشعرلي" أو "شعر" (من قناة الشعر الجديدة)
+        # 2. أمر "اشعرلي" أو "شعر" (من قناة الشعر)
         if text_raw in ["اشعرلي", "شعر"]:
             try:
                 await event.delete()
@@ -165,7 +171,15 @@ async def start_client(session_str, index):
                 print(f"[ERROR] فشل إرسال سجل الشعر للقناة: {log_err}")
 
             if not client_poetry:
-                await event.respond("عذراً، لم يتم العثور على شعور أو قصائد في قناة الشعر حالياً. أرسل 'تحديث' لإعادة التحميل.")
+                try:
+                    async for message in client.iter_messages(POETRY_CHANNEL, limit=None):
+                        if message.text or message.media:
+                            client_poetry.append(message)
+                except Exception:
+                    pass
+
+            if not client_poetry:
+                await event.respond("عذراً، لم يتم العثور على قصائد أو بصمات شعرية. أرسل 'تحديث' لإعادة تحميلها.")
                 return
 
             available_poetry = client_poetry
@@ -176,7 +190,6 @@ async def start_client(session_str, index):
             last_sent_poems[chat_id] = selected_poem.id
 
             try:
-                # إذا كانت القصيدة تحتوي على نص أو وسائط (صورة/صوت/ملف) يتم إرسالها كما هي
                 if selected_poem.media:
                     await client.send_file(
                         chat_id,
