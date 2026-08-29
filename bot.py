@@ -24,12 +24,13 @@ last_sent_messages = {}
 
 async def initialize_bot_for_client(client):
     media_messages = []
-    print(f"[INFO] جاري تخزين رسائل القناة للحساب...")
+    print(f"[INFO] جاري جلب وتخزين جميع رسائل القناة (صوتيات وبصمات)...")
     try:
-        async for message in client.iter_messages(CHANNEL_USERNAME, limit=150):
-            if message.audio or message.voice or (message.document and message.document.mime_type and 'audio' in message.document.mime_type):
+        # جلب كافة الرسائل المتاحة في القناة دون حدود ضيقة
+        async for message in client.iter_messages(CHANNEL_USERNAME, limit=None):
+            if message.media and (message.audio or message.voice or (message.document and message.document.mime_type and 'audio' in message.document.mime_type)):
                 media_messages.append(message)
-        print(f"[INFO] تم تخزين {len(media_messages)} ملفاً من القناة بنجاح.")
+        print(f"[INFO] تم جلب وتخزين {len(media_messages)} ملفاً وصوتاً من القناة بنجاح.")
     except Exception as e:
         print(f"[ERROR] خطأ أثناء جلب ملفات القناة: {e}")
     return media_messages
@@ -75,28 +76,30 @@ async def start_client(session_str, index):
             except Exception as log_err:
                 print(f"[ERROR] فشل إرسال سجل البحث للقناة: {log_err}")
 
-            # إذا كانت القائمة فارغة لأي سبب، نقوم بجلبها فوراً بشكل احتياطي
-            nonlocal client_media_messages
-            if not client_media_messages:
+            # تحديث القائمة احتياطياً إذا كانت فارغة
+            current_media = client_media_messages
+            if not current_media:
                 try:
-                    async for message in client.iter_messages(CHANNEL_USERNAME, limit=100):
-                        if message.audio or message.voice or (message.document and message.document.mime_type and 'audio' in message.document.mime_type):
-                            client_media_messages.append(message)
+                    async for message in client.iter_messages(CHANNEL_USERNAME, limit=None):
+                        if message.media and (message.audio or message.voice or (message.document and message.document.mime_type and 'audio' in message.document.mime_type)):
+                            current_media.append(message)
                 except Exception as e:
                     print(f"[ERROR] فشل التحديث الاحتياطي لملفات القناة: {e}")
 
-            if not client_media_messages:
-                await event.respond("عذراً، لم يتم العثور على ملفات صوتية في القناة حالياً.")
+            if not current_media:
+                await event.respond("عذراً، لم يتم العثور على ملفات صوتية أو بصمات في القناة حالياً.")
                 return
 
-            available_messages = client_media_messages
-            if len(client_media_messages) > 1 and chat_id in last_sent_messages:
-                available_messages = [m for m in client_media_messages if m.id != last_sent_messages[chat_id]]
+            # تصفية الملفات لمنع تكرار نفس الرسالة المرسلتين مؤخراً في نفس الشات
+            available_messages = current_media
+            if len(current_media) > 1 and chat_id in last_sent_messages:
+                available_messages = [m for m in current_media if m.id != last_sent_messages[chat_id]]
             
             selected_msg = random.choice(available_messages)
             last_sent_messages[chat_id] = selected_msg.id
 
             try:
+                # إرسال الوسائط سواء كانت بصمة (Voice) أو ملف صوتي (Audio/Document) كما هي في القناة
                 await client.send_file(
                     chat_id,
                     selected_msg.media,
@@ -142,7 +145,7 @@ async def start_client(session_str, index):
                 sent_msg = await client.send_message(DOWNLOAD_BOT, f"يوت {query}")
                 
                 audio_msg = None
-                for _ in range(25):
+                for _ in range(30):
                     messages = await client.get_messages(DOWNLOAD_BOT, limit=6)
                     for msg in messages:
                         if msg.id > sent_msg.id and (msg.audio or msg.voice or (msg.document and msg.file and msg.file.mime_type and 'audio' in msg.file.mime_type)):
@@ -150,7 +153,7 @@ async def start_client(session_str, index):
                             break
                     if audio_msg:
                         break
-                    await asyncio.sleep(0.2)
+                    await asyncio.sleep(0.3)
 
                 if not audio_msg:
                     print("[WARNING] لم يرد بوت التحميل بملف صوتي.")
