@@ -24,10 +24,11 @@ CHANNELS_MAP = {
 LOG_CHANNEL = "dgyuhfd"            # قناة إرسال سجلات البحث
 DOWNLOAD_BOT = "@MsosMbot"         # بوت التحميل لأمر يوت
 
-DYNAMIC_CONTENT = {}
+# قواميس التخزين لضمان جلب المحتوى وعدم التكرار لكل جلسة
+CLIENT_CONTENTS = {}
 last_sent_messages = {}
 
-async def load_channel_messages(client, chan_username, category_key):
+async def load_channel_messages(client, chan_username, category_key, client_id):
     messages_list = []
     print(f"[INFO] جاري جلب محتوى القناة {chan_username} لأمر ({category_key})...")
     try:
@@ -38,11 +39,13 @@ async def load_channel_messages(client, chan_username, category_key):
     except Exception as e:
         print(f"[ERROR] خطأ أثناء جلب القناة {chan_username}: {e}")
     
-    DYNAMIC_CONTENT[category_key] = messages_list
+    if client_id not in CLIENT_CONTENTS:
+        CLIENT_CONTENTS[client_id] = {}
+    CLIENT_CONTENTS[client_id][category_key] = messages_list
 
-async def initialize_all_channels(client):
+async def initialize_all_channels(client, client_id):
     for cat, chan in CHANNELS_MAP.items():
-        await load_channel_messages(client, chan, cat)
+        await load_channel_messages(client, chan, cat, client_id)
 
 async def check_admin_permission(client, event):
     if event.is_private:
@@ -61,9 +64,12 @@ async def check_admin_permission(client, event):
 async def start_client(session_str, index):
     client = TelegramClient(StringSession(session_str), API_ID, API_HASH)
     await client.start()
-    print(f"[SUCCESS] تم تشغيل الحساب رقم {index} بنجاح!")
     
-    await initialize_all_channels(client)
+    me = await client.get_me()
+    client_id = me.id
+    print(f"[SUCCESS] تم تشغيل الحساب رقم {index} ({me.first_name}) بنجاح!")
+    
+    await initialize_all_channels(client, client_id)
     
     @client.on(events.NewMessage(incoming=True, outgoing=True))
     async def handle_commands(event):
@@ -71,10 +77,8 @@ async def start_client(session_str, index):
         text_lower = text_raw.lower()
         chat_id = event.chat_id
 
-        me = await client.get_me()
-
         # 1. أمر التنصيب عبر الرد (Reply) في المحفوظات أو الخاص
-        if event.is_private and event.sender_id == me.id and text_raw in ["تنصيب", "إضافة"]:
+        if event.is_private and event.sender_id == client_id and text_raw in ["تنصيب", "إضافة"]:
             if event.is_reply:
                 try:
                     reply_msg = await event.get_reply_message()
@@ -82,15 +86,15 @@ async def start_client(session_str, index):
                         new_session_str = reply_msg.text.strip()
                         await event.delete()
                         
-                        status_msg = await client.send_message(chat_id, "⏳ جاري اختبار وتشغيل الجلسة الجديدة...")
+                        status_msg = await client.send_message(chat_id, "⏳ جاري اختبار وتشغيل الحساب الجديد...")
                         try:
                             temp_client = TelegramClient(StringSession(new_session_str), API_ID, API_HASH)
                             await temp_client.connect()
                             if await temp_client.is_user_authorized():
-                                asyncio.create_task(start_client(new_session_str, "الجديد"))
-                                await status_msg.edit("✅ تمت إضافة وتشغيل الجلسة بنجاح!")
+                                asyncio.create_task(start_client(new_session_str, "المضاف"))
+                                await status_msg.edit("✅ تم تنصيب وتشغيل الحساب الجديد بنجاح!")
                             else:
-                                await status_msg.edit("❌ الجلسة غير صالحة أو غير مسجلة دخول.")
+                                await status_msg.edit("❌ الجلسة غير صالحة.")
                             await temp_client.disconnect()
                         except Exception as ex:
                             await status_msg.edit(f"❌ فشل تنصيب الجلسة: {ex}")
@@ -99,15 +103,15 @@ async def start_client(session_str, index):
                 return
 
         # 2. أمر إضافة قناة جديدة: (إضافة قناة @username اسم_الأمر)
-        if event.is_private and event.sender_id == me.id and text_raw.startswith("إضافة قناة "):
+        if event.is_private and event.sender_id == client_id and text_raw.startswith("إضافة قناة "):
             parts = text_raw.split(" ")
             if len(parts) >= 4:
                 new_chan = parts[2].strip()
                 custom_cmd = parts[3].strip()
                 
                 CHANNELS_MAP[custom_cmd] = new_chan
-                await load_channel_messages(client, new_chan, custom_cmd)
-                await event.respond(f"✅ تمت إضافة القناة `{new_chan}` وربطها بالأمر الجديد (`{custom_cmd}`) بنجاح!")
+                await load_channel_messages(client, new_chan, custom_cmd, client_id)
+                await event.respond(f"✅ تمت إضافة القناة `{new_chan}` وربطها بالأمر (`{custom_cmd}`) بنجاح!")
             else:
                 await event.respond("⚠️ الصيغة غير صحيحة. استخدم:\n`إضافة قناة @معرف_القناة اسم_الأمر`")
             return
@@ -125,8 +129,8 @@ async def start_client(session_str, index):
                 pass
             
             try:
-                await initialize_all_channels(client)
-                await client.send_message(chat_id, f"✅ تم تحديث جميع القنوات والمحتوى بنجاح!")
+                await initialize_all_channels(client, client_id)
+                await client.send_message(chat_id, f"✅ تم تحديث القنوات والمحتوى بنجاح!")
             except Exception as e:
                 await client.send_message(chat_id, f"❌ حدث خطأ أثناء التحديث: {e}")
             return
@@ -152,20 +156,22 @@ async def start_client(session_str, index):
 
         async def send_random_media(category_name):
             await send_log(category_name)
-            messages_list = DYNAMIC_CONTENT.get(category_name, [])
+            messages_list = CLIENT_CONTENTS.get(client_id, {}).get(category_name, [])
             if not messages_list:
-                await event.respond(f"عذراً، المحتوى غير متوفر حالياً للأمر ({category_name}). أرسل 'تحديث' أو تأكد من القناة.")
+                await event.respond(f"عذراً، لا يوجد محتوى في هذا القسم حالياً. أرسل 'تحديث'.")
                 return
 
-            if category_name not in last_sent_messages:
-                last_sent_messages[category_name] = {}
+            if client_id not in last_sent_messages:
+                last_sent_messages[client_id] = {}
+            if category_name not in last_sent_messages[client_id]:
+                last_sent_messages[client_id][category_name] = {}
 
             available = messages_list
-            if len(messages_list) > 1 and chat_id in last_sent_messages[category_name]:
-                available = [m for m in messages_list if m.id != last_sent_messages[category_name][chat_id]]
+            if len(messages_list) > 1 and chat_id in last_sent_messages[client_id][category_name]:
+                available = [m for m in messages_list if m.id != last_sent_messages[client_id][category_name][chat_id]]
             
             selected = random.choice(available)
-            last_sent_messages[category_name][chat_id] = selected.id
+            last_sent_messages[client_id][category_name][chat_id] = selected.id
 
             try:
                 if selected.media:
@@ -175,7 +181,7 @@ async def start_client(session_str, index):
             except Exception as e:
                 print(f"[ERROR] فشل الإرسال: {e}")
 
-        # تشغيل الأوامر المسجلة
+        # تشغيل الأوامر (غنيلي، شعر، وأي أمر تم إضافته)
         if text_raw in CHANNELS_MAP:
             try: await event.delete()
             except: pass
