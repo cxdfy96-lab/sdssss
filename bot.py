@@ -107,7 +107,8 @@ async def start_client(session_str, index):
             parts = text_raw.split(" ")
             if len(parts) >= 4:
                 new_chan = parts[2].strip()
-                custom_cmd = parts[3].strip()
+                # دمج باقي الأجزاء لتصبح الأمر (حتى لو كان عدة كلمات مثل: صافي اشعر لي)
+                custom_cmd = " ".join(parts[3:]).strip()
                 
                 CHANNELS_MAP[custom_cmd] = new_chan
                 await load_channel_messages(client, new_chan, custom_cmd, client_id)
@@ -181,17 +182,17 @@ async def start_client(session_str, index):
             except Exception as e:
                 print(f"[ERROR] فشل الإرسال: {e}")
 
-        # تشغيل الأوامر (غنيلي، شعر، وأي أمر تم إضافته)
-        if text_raw in CHANNELS_MAP:
-            try: await event.delete()
-            except: pass
-            await send_random_media(text_raw)
-            return
+        # التحقق من الأوامر المسجلة (حتى لو كانت عبارات مركبة مطابقة تماماً للنص المدخل)
+        matched_cmd = None
+        for cmd in CHANNELS_MAP.keys():
+            if text_raw == cmd:
+                matched_cmd = cmd
+                break
 
-        if text_raw == "اشعرلي" and "شعر" in CHANNELS_MAP:
+        if matched_cmd:
             try: await event.delete()
             except: pass
-            await send_random_media("شعر")
+            await send_random_media(matched_cmd)
             return
 
         # أمر بحث اليوتيوب
