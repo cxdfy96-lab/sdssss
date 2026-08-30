@@ -12,7 +12,7 @@ API_HASH = os.environ.get("API_HASH", "")
 SESSION_STRINGS_RAW = os.environ.get("SESSION_STRING", "")
 SESSIONS = [s.strip() for s in SESSION_STRINGS_RAW.split(",") if s.strip()]
 
-# 📌 القنوات والأوامر الافتراضية الأولية (يمكنك إضافة أو تغيير أي منها لاحقاً من التليجرام مباشرة):
+# 📌 القنوات والأوامر الافتراضية
 CHANNELS_MAP = {
     "غنيلي": "arggrw",
     "شعر": "zfghjjg",
@@ -24,7 +24,6 @@ CHANNELS_MAP = {
 LOG_CHANNEL = "dgyuhfd"            # قناة إرسال سجلات البحث
 DOWNLOAD_BOT = "@MsosMbot"         # بوت التحميل لأمر يوت
 
-# قواميس ديناميكية لتخزين محتوى القنوات وآخر رسالة مرسلة لكل أمر ولكل دردشة لضمان عدم التكرار
 DYNAMIC_CONTENT = {}
 last_sent_messages = {}
 
@@ -45,11 +44,9 @@ async def initialize_all_channels(client):
     for cat, chan in CHANNELS_MAP.items():
         await load_channel_messages(client, chan, cat)
 
-# دالة للتحقق مما إذا كان الحساب مشرفاً ولديه صلاحيات في المجموعة أو القناة
 async def check_admin_permission(client, event):
     if event.is_private:
         return True
-    
     try:
         chat = await event.get_chat()
         if chat.megagroup or chat.broadcast or getattr(chat, 'forum', False):
@@ -59,7 +56,6 @@ async def check_admin_permission(client, event):
                 return True
     except Exception as e:
         print(f"[ERROR] التحقق من الصلاحيات: {e}")
-    
     return False
 
 async def start_client(session_str, index):
@@ -77,32 +73,32 @@ async def start_client(session_str, index):
 
         me = await client.get_me()
 
-        # 1. ميزة إضافة جلسة جديدة عبر الرد (Reply) بكلمة "تنصيب" أو "إضافة" في المحفوظات
+        # 1. أمر التنصيب عبر الرد (Reply) في المحفوظات أو الخاص
         if event.is_private and event.sender_id == me.id and text_raw in ["تنصيب", "إضافة"]:
             if event.is_reply:
-                reply_msg = await event.get_reply_message()
-                if reply_msg and reply_msg.text:
-                    new_session_str = reply_msg.text.strip()
-                    try:
+                try:
+                    reply_msg = await event.get_reply_message()
+                    if reply_msg and reply_msg.text:
+                        new_session_str = reply_msg.text.strip()
                         await event.delete()
-                    except:
-                        pass
-                    
-                    status_msg = await client.send_message(chat_id, "⏳ جاري اختبار وتشغيل الجلسة الجديدة...")
-                    try:
-                        temp_client = TelegramClient(StringSession(new_session_str), API_ID, API_HASH)
-                        await temp_client.connect()
-                        if await temp_client.is_user_authorized():
-                            asyncio.create_task(start_client(new_session_str, "الجديد"))
-                            await status_msg.edit("✅ تمت إضافة وتشغيل الجلسة بنجاح!")
-                        else:
-                            await status_msg.edit("❌ الجلسة غير صالحة أو غير مسجلة دخول.")
-                        await temp_client.disconnect()
-                    except Exception as ex:
-                        await status_msg.edit(f"❌ فشل تنصيب الجلسة: {ex}")
+                        
+                        status_msg = await client.send_message(chat_id, "⏳ جاري اختبار وتشغيل الجلسة الجديدة...")
+                        try:
+                            temp_client = TelegramClient(StringSession(new_session_str), API_ID, API_HASH)
+                            await temp_client.connect()
+                            if await temp_client.is_user_authorized():
+                                asyncio.create_task(start_client(new_session_str, "الجديد"))
+                                await status_msg.edit("✅ تمت إضافة وتشغيل الجلسة بنجاح!")
+                            else:
+                                await status_msg.edit("❌ الجلسة غير صالحة أو غير مسجلة دخول.")
+                            await temp_client.disconnect()
+                        except Exception as ex:
+                            await status_msg.edit(f"❌ فشل تنصيب الجلسة: {ex}")
+                except Exception as err:
+                    print(f"[ERROR] مشكلة في التنصيب: {err}")
                 return
 
-        # 2. ميزة إضافة قناة وأمر جديد تماماً من داخل التليجرام: (مثال: إضافة قناة @username صور)
+        # 2. أمر إضافة قناة جديدة: (إضافة قناة @username اسم_الأمر)
         if event.is_private and event.sender_id == me.id and text_raw.startswith("إضافة قناة "):
             parts = text_raw.split(" ")
             if len(parts) >= 4:
@@ -111,18 +107,17 @@ async def start_client(session_str, index):
                 
                 CHANNELS_MAP[custom_cmd] = new_chan
                 await load_channel_messages(client, new_chan, custom_cmd)
-                await event.respond(f"✅ تمت إضافة القناة `{new_chan}` وربطها بالأمر الجديد (`{custom_cmd}`) بنجاح وتعمل الآن!")
+                await event.respond(f"✅ تمت إضافة القناة `{new_chan}` وربطها بالأمر الجديد (`{custom_cmd}`) بنجاح!")
             else:
                 await event.respond("⚠️ الصيغة غير صحيحة. استخدم:\n`إضافة قناة @معرف_القناة اسم_الأمر`")
             return
 
-        # منع تنفيذ الأوامر في المجموعات أو القنوات إلا إذا كان الحساب مشرفاً وله صلاحيات
         if not event.is_private:
             is_allowed = await check_admin_permission(client, event)
             if not is_allowed:
                 return
 
-        # 3. أمر "تحديث" لإعادة تحميل جميع القنوات يدوياً
+        # 3. أمر التحديث
         if text_raw == "تحديث":
             try:
                 await event.delete()
@@ -136,7 +131,6 @@ async def start_client(session_str, index):
                 await client.send_message(chat_id, f"❌ حدث خطأ أثناء التحديث: {e}")
             return
 
-        # دالة مساعدة لإرسال السجلات
         async def send_log(cmd_name):
             try:
                 sender = await event.get_sender()
@@ -156,7 +150,6 @@ async def start_client(session_str, index):
             except Exception as log_err:
                 print(f"[ERROR] فشل إرسال السجل: {log_err}")
 
-        # دالة مساعدة للإرسال العشوائي بدون تكرار لأي أمر مضاف
         async def send_random_media(category_name):
             await send_log(category_name)
             messages_list = DYNAMIC_CONTENT.get(category_name, [])
@@ -182,21 +175,20 @@ async def start_client(session_str, index):
             except Exception as e:
                 print(f"[ERROR] فشل الإرسال: {e}")
 
-        # 4. المعالج الديناميكي لأي أمر موجود في القنوات المسجلة (الافتراضية أو المضافة حديثاً)
+        # تشغيل الأوامر المسجلة
         if text_raw in CHANNELS_MAP:
             try: await event.delete()
             except: pass
             await send_random_media(text_raw)
             return
 
-        # معالجة بديلة لأمر شعر لو تم كتابته (اشعرلي أو شعر)
         if text_raw == "اشعرلي" and "شعر" in CHANNELS_MAP:
             try: await event.delete()
             except: pass
             await send_random_media("شعر")
             return
 
-        # 5. أمر بحث اليوتيوب (يوت / يوتو)
+        # أمر بحث اليوتيوب
         if text_lower.startswith("يوت ") or text_lower.startswith("يوتو "):
             query = text_raw[4:].strip() if text_lower.startswith("يوت ") else text_raw[5:].strip()
             if not query: return
