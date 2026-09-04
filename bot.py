@@ -112,11 +112,29 @@ async def admin_approve_reject(callback: types.CallbackQuery):
     target_user_id = int(parts[1])
     
     if action == "approve":
-        supabase.table("user_bots").upsert({"user_id": target_user_id, "is_approved": True}, on_conflict="user_id").execute()
+        # تخزين أو تحديث حالة الموافقة للمستخدم المستهدف
+        supabase.table("user_bots").upsert({
+            "user_id": target_user_id,
+            "is_approved": True,
+            "session_string": "",
+            "account_id": target_user_id
+        }, on_conflict="account_id").execute()
+        
         try:
-            await bot.send_message(target_user_id, "تم استلام النجوم والموافقة على طلب التنصيب من قبل المطور!\n\nيمكنك الآن إرسال رقم هاتفك مع رمز الدولة لبدء التشغيل (مثال: +9647700000000):")
-        except:
-            pass
+            # إنشاء زر مشاركة جهة الاتصال التلقائي
+            contact_kb = types.ReplyKeyboardMarkup(
+                keyboard=[[types.KeyboardButton(text="📱 مشاركة رقم الهاتف", request_contact=True)]],
+                resize_keyboard=True,
+                one_time_keyboard=True
+            )
+            await bot.send_message(
+                target_user_id, 
+                "تم استلام النجوم والموافقة على طلب التنصيب من قبل المطور!\n\nاضغط على الزر أدناه لمشاركة رقم هاتفك وبدء التشغيل تلقائياً:",
+                reply_markup=contact_kb
+            )
+        except Exception as e:
+            print(f"[ERROR] إرسال رسالة الموافقة: {e}")
+            
         await callback.message.edit_text(f"تمت الموافقة وتفعيل الاشتراك للمستخدم {target_user_id} بنجاح.")
     else:
         try:
@@ -126,7 +144,8 @@ async def admin_approve_reject(callback: types.CallbackQuery):
         await callback.message.edit_text(f"تم رفض المستخدم {target_user_id}.")
     await callback.answer()
 
-@dp.message(lambda message: message.text and message.text.startswith("+"))
+# استقبال رقم الهاتف عبر زر مشاركة جهة الاتصال أو كتابة يدوية
+@dp.message(lambda message: message.contact or (message.text and message.text.startswith("+")))
 async def handle_phone_input(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
     res = supabase.table("user_bots").select("is_approved").eq("user_id", user_id).execute()
@@ -135,14 +154,20 @@ async def handle_phone_input(message: types.Message, state: FSMContext):
             await message.answer("ليس لديك صلاحية تنصيب نشطة. يرجى دفع 15 نجمة ومراسلة المطور للتفعيل أولاً.")
             return
 
-    phone = message.text.strip()
+    phone = message.contact.phone_number if message.contact else message.text.strip()
+    if not phone.startswith("+"):
+        phone = "+" + phone
+
     await state.update_data(phone=phone)
     client = TelegramClient(StringSession(), API_ID, API_HASH)
     await client.connect()
     try:
         sent = await client.send_code_request(phone)
         await state.update_data(phone_code_hash=sent.phone_code_hash, client=client)
-        await message.answer("تم إرسال رمز التحقق إلى تلجرام. أرسل الرمز الآن:")
+        
+        # إخفاء كيبورد مشاركة الاتصال وإرسال رسالة طلب الرمز
+        remove_kb = types.ReplyKeyboardRemove()
+        await message.answer("تم إرسال رمز التحقق إلى تلجرام. أرسل الرمز الآن:", reply_markup=remove_kb)
         await state.set_state(LoginState.waiting_for_code)
     except Exception as e:
         await message.answer(f"خطأ: {e}")
@@ -175,8 +200,9 @@ async def process_code(message: types.Message, state: FSMContext):
             "is_active": True,
             "clock_enabled": True,
             "filter_enabled": True,
-            "clock_font": "circle"
-        }, on_conflict="user_id").execute()
+            "clock_font": "circle",
+            "is_approved": True
+        }, on_conflict="account_id").execute()
         
         await message.answer(f"تم تنصيب الحساب وتفعيل اليوزربوت بنجاح ولن يتوقف!\nالاسم: {me.first_name}", reply_markup=get_main_menu_keyboard())
         asyncio.create_task(start_userbot(session_str, me.id))
@@ -217,8 +243,9 @@ async def process_password(message: types.Message, state: FSMContext):
             "is_active": True,
             "clock_enabled": True,
             "filter_enabled": True,
-            "clock_font": "circle"
-        }, on_conflict="user_id").execute()
+            "clock_font": "circle",
+            "is_approved": True
+        }, on_conflict="account_id").execute()
         
         await message.answer(f"تم تفعيل الحساب بنجاح وتجاوز التحقق!\nالاسم: {me.first_name}", reply_markup=get_main_menu_keyboard())
         asyncio.create_task(start_userbot(session_str, me.id))
