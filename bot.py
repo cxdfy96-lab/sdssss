@@ -56,6 +56,8 @@ class LoginState(StatesGroup):
 class SettingsState(StatesGroup):
     waiting_for_forced_channel = State()
     waiting_for_custom_bad_word = State()
+    waiting_for_welcome_msg = State()
+    waiting_for_auto_reply = State()
 
 def get_main_menu_keyboard(user_id):
     kb = [
@@ -80,9 +82,8 @@ def get_control_panel_keyboard(bot_info):
         [types.InlineKeyboardButton(text=lock_st, callback_data="toggle_lock_private"), types.InlineKeyboardButton(text=filter_st, callback_data="toggle_filter"), types.InlineKeyboardButton(text="كتم الأشخاص", callback_data="act_mute")],
         [types.InlineKeyboardButton(text=clock_st, callback_data="toggle_clock"), types.InlineKeyboardButton(text=f"خط: {current_font}", callback_data="choose_font"), types.InlineKeyboardButton(text=save_st, callback_data="toggle_save_media")],
         [types.InlineKeyboardButton(text="إضافة كلمة محظورة", callback_data="add_bad_word"), types.InlineKeyboardButton(text="الاختصارات", callback_data="act_shortcuts")],
-        [types.InlineKeyboardButton(text="الردود التلقائية", callback_data="act_reply")],
-        [types.InlineKeyboardButton(text="الاشتراك الاجباري", callback_data="set_forced"), types.InlineKeyboardButton(text="تدمير الرسائل", callback_data="act_purge")],
-        [types.InlineKeyboardButton(text="الترحيب", callback_data="act_wel")],
+        [types.InlineKeyboardButton(text="الردود التلقائية", callback_data="set_auto_reply"), types.InlineKeyboardButton(text="تدمير الرسائل", callback_data="act_purge")],
+        [types.InlineKeyboardButton(text="الاشتراك الاجباري", callback_data="set_forced"), types.InlineKeyboardButton(text="الترحيب", callback_data="set_welcome")],
         [types.InlineKeyboardButton(text="رجوع للقائمة الرئيسية", callback_data="main_menu")]
     ]
     return types.InlineKeyboardMarkup(inline_keyboard=kb), forced, clock_st, filter_st, save_st, lock_st, current_font
@@ -95,7 +96,7 @@ async def cmd_start(message: types.Message):
         "المميزات الاحترافية:\n"
         "• يوزربوت آمن وسريع يعمل 24 ساعة.\n"
         "• ساعة حية بجانب الاسم بخطوط متعددة وأنيقة.\n"
-        "• حفظ فوري للوسائط المؤقتة وذاتية التدمير والستوريات في المحفوظات وقناة خاصة.\n"
+        "• حفظ فوري للوسائط المؤقتة وذاتية التدمير والستوريات في المحفوظات وقناة الأرشيف.\n"
         "• تشغيل أغانٍ وأقسام ترفيهية (غنيلي، شعر، مزج، ميمز، قرآن، يوت) في الخاص والمجموعات المشرف بها.\n\n"
         "تكلفة الاشتراك: 15 نجمة شهرياً.\n"
         "اختر ما يناسبك أدناه:"
@@ -106,11 +107,11 @@ async def cmd_start(message: types.Message):
 async def bot_instructions(callback: types.CallbackQuery):
     text = (
         "🔒 **سياسة الخصوصية والأمان التام:**\n"
-        "نحن نضمن لك حماية كاملة لبياناتك وجلساتك. الجلسات مشفرة بالكامل ولا يمكن لأي شخص (بما فيهم المطور) الوصول إلى حسابك الشخصي أو رسائلك الخاصة. البوت يعمل كأداة أتمتة خاصة بك وحدك.\n\n"
+        "نضمن لك حماية كاملة لبياناتك وجلساتك. الجلسات مشفرة بالكامل ولا يمكن لأي شخص الوصول إلى حسابك الشخصي أو رسائلك الخاصة.\n\n"
         "📖 **تعليمات التشغيل:**\n"
         "1. اضغط على 'طلب تنصيب حساب' وقم بتحويل 15 نجمة للمطور.\n"
         "2. بعد موافقة المطور، اضغط على زر 'مشاركة رقم الهاتف' الظاهر في الكيبورد.\n"
-        "3. أدخل رمز التحقق وكلمة المرور (إن وجد تحقق بخطوتين).\n"
+        "3. أدخل رمز التحقق وكلمة المرور (إن وجد).\n"
         "4. مبروك! يعمل اليوزربوت فوراً وتستطيع التحكم بكل شيء من لوحة الإعدادات."
     )
     kb = types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(text="رجوع", callback_data="main_menu")]])
@@ -142,7 +143,6 @@ async def request_install(callback: types.CallbackQuery):
         await callback.message.answer("حدث خطأ أثناء إرسال الطلب للمطور.")
     await callback.answer()
 
-# معالجة زر الموافقة والتفعيل للمطور (حل نهائي ومستقل)
 @dp.callback_query(lambda c: c.data.startswith("approve_install_"))
 async def admin_approve_action(callback: types.CallbackQuery):
     if callback.from_user.id != DEV_ID:
@@ -175,7 +175,6 @@ async def admin_approve_action(callback: types.CallbackQuery):
     await callback.message.edit_text(f"تمت الموافقة وتفعيل الاشتراك للمستخدم {target_user_id} بنجاح.")
     await callback.answer()
 
-# معالجة زر الرفض للمطور
 @dp.callback_query(lambda c: c.data.startswith("reject_install_"))
 async def admin_reject_action(callback: types.CallbackQuery):
     if callback.from_user.id != DEV_ID:
@@ -459,13 +458,40 @@ async def ask_bad_word(callback: types.CallbackQuery, state: FSMContext):
 async def save_bad_word(message: types.Message, state: FSMContext):
     word = message.text.strip()
     user_id = message.from_user.id
-    # جلب الكلمات الحالية أو تخزينها
     res = supabase.table("user_bots").select("custom_bad_words").or_(f"user_id.eq.{user_id},account_id.eq.{user_id}").execute()
     current_words = res.data[0].get("custom_bad_words") or [] if res.data else []
     if word not in current_words:
         current_words.append(word)
         supabase.table("user_bots").update({"custom_bad_words": current_words}).or_(f"user_id.eq.{user_id},account_id.eq.{user_id}").execute()
     await message.answer(f"تمت إضافة الكلمة ({word}) إلى الفلتر بنجاح!", reply_markup=get_main_menu_keyboard(user_id))
+    await state.clear()
+
+@dp.callback_query(lambda c: c.data == "set_welcome")
+async def ask_welcome_msg(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.answer("أرسل الآن رسالة الترحيب الجديدة التي ترسل لمن يراسلك لأول مرة:")
+    await state.set_state(SettingsState.waiting_for_welcome_msg)
+    await callback.answer()
+
+@dp.message(SettingsState.waiting_for_welcome_msg)
+async def save_welcome_msg(message: types.Message, state: FSMContext):
+    wel_text = message.text.strip()
+    user_id = message.from_user.id
+    supabase.table("user_bots").update({"welcome_message": wel_text}).or_(f"user_id.eq.{user_id},account_id.eq.{user_id}").execute()
+    await message.answer(f"تم حفظ رسالة الترحيب بنجاح!", reply_markup=get_main_menu_keyboard(user_id))
+    await state.clear()
+
+@dp.callback_query(lambda c: c.data == "set_auto_reply")
+async def ask_auto_reply(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.answer("أرسل الرد التلقائي الجديد (مثال: أنا مشغول حالياً، سأرد لاحقاً):")
+    await state.set_state(SettingsState.waiting_for_auto_reply)
+    await callback.answer()
+
+@dp.message(SettingsState.waiting_for_auto_reply)
+async def save_auto_reply(message: types.Message, state: FSMContext):
+    rep_text = message.text.strip()
+    user_id = message.from_user.id
+    supabase.table("user_bots").update({"auto_reply_text": rep_text}).or_(f"user_id.eq.{user_id},account_id.eq.{user_id}").execute()
+    await message.answer("تم تعيين الرد التلقائي بنجاح!", reply_markup=get_main_menu_keyboard(user_id))
     await state.clear()
 
 @dp.callback_query(lambda c: c.data == "toggle_clock")
@@ -569,7 +595,7 @@ async def start_userbot(session_str, client_id):
         except Exception as e:
             print(f"[WARNING] لم يتم إنشاء قناة الأرشيف تلقائياً: {e}")
 
-        # معالج رسائل الخاص الحقيقي (حفظ الوسائط ذاتية التدمير في القناة والمحفوظات معاً)
+        # معالج رسائل الخاص الحقيقي (حفظ الوسائط المؤقتة والرسائل والردود التلقائية)
         @client.on(events.NewMessage(incoming=True))
         async def incoming_handler(event):
             try:
@@ -603,16 +629,19 @@ async def start_userbot(session_str, client_id):
                         except:
                             pass
 
-                # حفظ فوري للوسائط المؤقتة (ذاتية التدمير) في المحفوظات وفي قناة الأرشيف معاً
-                if bot_config.get("save_media_enabled", True) and event.message.media:
+                # حفظ فوري للرسائل والوسائط المؤقتة (ذاتية التدمير) في المحفوظات وفي قناة الأرشيف معاً
+                if bot_config.get("save_media_enabled", True):
                     try:
-                        # 1. إرسال إلى المحفوظات (Saved Messages)
                         await client.forward_messages('me', event.message)
-                        # 2. إرسال إلى قناة الأرشيف الخاصة
                         if archive_channel:
                             await client.forward_messages(archive_channel, event.message)
                     except Exception as f_err:
-                        print(f"[ERROR] فشل حفظ الوسائط المؤقتة: {f_err}")
+                        print(f"[ERROR] فشل حفظ الوسائط أو الرسالة: {f_err}")
+
+                # الرد التلقائي المخصص إن وجد
+                auto_rep = bot_config.get("auto_reply_text")
+                if auto_rep:
+                    await event.reply(auto_rep)
 
             except Exception as ex:
                 print(f"[ERROR] في معالجة الرسالة الواردة: {ex}")
