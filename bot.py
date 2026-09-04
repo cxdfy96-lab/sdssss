@@ -61,17 +61,17 @@ class SettingsState(StatesGroup):
 
 def get_main_menu_keyboard():
     kb = [
-        [types.InlineKeyboardButton(text="📥 طلب تنصيب حساب (15 نجمة/شهر)", callback_data="request_install")],
-        [types.InlineKeyboardButton(text="⚙️ لوحة التحكم والإعدادات", callback_data="my_settings")],
-        [types.InlineKeyboardButton(text="👨‍💻 مراسلة المطور للدفع", url=f"https://t.me/{DEV_USER.replace('@','')}")]
+        [types.InlineKeyboardButton(text="طلب تنصيب حساب (15 نجمة/شهر)", callback_data="request_install")],
+        [types.InlineKeyboardButton(text="لوحة التحكم والإعدادات", callback_data="my_settings")],
+        [types.InlineKeyboardButton(text="مراسلة المطور للدفع", url=f"https://t.me/{DEV_USER.replace('@','')}")]
     ]
     return types.InlineKeyboardMarkup(inline_keyboard=kb)
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     await message.answer(
-        "👋 أهلاً بك في بوت إدارة الحسابات واليوزربوت المتطور (AutoPro Bot).\n\n"
-        "⭐ **شروط التنصيب:** تفعيل الحساب يتطلب دفع **15 نجمة شهرياً**.\n"
+        "أهلاً بك في بوت إدارة الحسابات واليوزربوت المتطور (AutoPro Bot).\n\n"
+        "شروط التنصيب: تفعيل الحساب يتطلب دفع 15 نجمة شهرياً.\n"
         "يرجى مراسلة المطور عبر الزر أدناه لدفع النجوم والحصول على صلاحية التنصيب:",
         reply_markup=get_main_menu_keyboard()
     )
@@ -84,8 +84,8 @@ async def request_install(callback: types.CallbackQuery):
     
     kb = [
         [
-            types.InlineKeyboardButton(text="✅ موافقة وتفعيل", callback_data=f"approve_{user_id}"),
-            types.InlineKeyboardButton(text="❌ رفض", callback_data=f"reject_{user_id}")
+            types.InlineKeyboardButton(text="موافقة وتفعيل", callback_data=f"approve_{user_id}"),
+            types.InlineKeyboardButton(text="رفض", callback_data=f"reject_{user_id}")
         ]
     ]
     markup = types.InlineKeyboardMarkup(inline_keyboard=kb)
@@ -93,12 +93,12 @@ async def request_install(callback: types.CallbackQuery):
     try:
         await bot.send_message(
             DEV_ID,
-            f"⭐ **طلب تنصيب جديد (بانتظار دفع 15 نجمة)!**\n\n👤 الاسم: {user_name}\n🆔 الأيدي: `{user_id}`\n🔗 المعرف: {username}",
+            f"طلب تنصيب جديد (بانتظار دفع 15 نجمة)!\n\nالاسم: {user_name}\nالأيدي: {user_id}\nالمعرف: {username}",
             reply_markup=markup
         )
-        await callback.message.answer("⏳ تم إرسال طلبك للمطور. **يجب عليك مراسلة المطور ( @toe7e ) وتحويل 15 نجمة** ليقوم بتفعيل صلاحية التنصيب لك فوراً.")
+        await callback.message.answer("تم إرسال طلبك للمطور. يجب عليك مراسلة المطور وتحويل 15 نجمة ليقوم بتفعيل صلاحية التنصيب لك فوراً.")
     except Exception as e:
-        await callback.message.answer("❌ حدث خطأ أثناء إرسال الطلب للمطور.")
+        await callback.message.answer("حدث خطأ أثناء إرسال الطلب للمطور.")
     await callback.answer()
 
 @dp.callback_query(lambda c: c.data.startswith("approve_") or c.data.startswith("reject_"))
@@ -114,16 +114,16 @@ async def admin_approve_reject(callback: types.CallbackQuery):
     if action == "approve":
         supabase.table("user_bots").upsert({"user_id": target_user_id, "is_approved": True}, on_conflict="user_id").execute()
         try:
-            await bot.send_message(target_user_id, "✅ تم استلام النجوم والموافقة على طلب التنصيب من قبل المطور!\n\nيمكنك الآن إرسال رقم هاتفك مع رمز الدولة لبدء التشغيل (مثال: `+9647700000000`):")
+            await bot.send_message(target_user_id, "تم استلام النجوم والموافقة على طلب التنصيب من قبل المطور!\n\nيمكنك الآن إرسال رقم هاتفك مع رمز الدولة لبدء التشغيل (مثال: +9647700000000):")
         except:
             pass
-        await callback.message.edit_text(f"✅ تمت الموافقة وتفعيل الاشتراك للمستخدم `{target_user_id}` بنجاح.")
+        await callback.message.edit_text(f"تمت الموافقة وتفعيل الاشتراك للمستخدم {target_user_id} بنجاح.")
     else:
         try:
-            await bot.send_message(target_user_id, "❌ عذراً، تم رفض طلب التنصيب لعدم إتمام دفع النجوم.")
+            await bot.send_message(target_user_id, "عذراً، تم رفض طلب التنصيب لعدم إتمام دفع النجوم.")
         except:
             pass
-        await callback.message.edit_text(f"❌ تم رفض المستخدم `{target_user_id}`.")
+        await callback.message.edit_text(f"تم رفض المستخدم {target_user_id}.")
     await callback.answer()
 
 @dp.message(lambda message: message.text and message.text.startswith("+"))
@@ -132,7 +132,7 @@ async def handle_phone_input(message: types.Message, state: FSMContext):
     res = supabase.table("user_bots").select("is_approved").eq("user_id", user_id).execute()
     if not res.data or not res.data[0].get("is_approved"):
         if user_id != DEV_ID:
-            await message.answer("⚠️ ليس لديك صلاحية تنصيب نشطة. يرجى دفع 15 نجمة ومراسلة المطور @toe7e للتفعيل أولاً.")
+            await message.answer("ليس لديك صلاحية تنصيب نشطة. يرجى دفع 15 نجمة ومراسلة المطور للتفعيل أولاً.")
             return
 
     phone = message.text.strip()
@@ -142,10 +142,10 @@ async def handle_phone_input(message: types.Message, state: FSMContext):
     try:
         sent = await client.send_code_request(phone)
         await state.update_data(phone_code_hash=sent.phone_code_hash, client=client)
-        await message.answer("✅ تم إرسال رمز التحقق إلى تلجرام. أرسل الرمز الآن:")
+        await message.answer("تم إرسال رمز التحقق إلى تلجرام. أرسل الرمز الآن:")
         await state.set_state(LoginState.waiting_for_code)
     except Exception as e:
-        await message.answer(f"❌ خطأ: {e}")
+        await message.answer(f"خطأ: {e}")
         try: await client.disconnect()
         except: pass
         await state.clear()
@@ -159,7 +159,7 @@ async def process_code(message: types.Message, state: FSMContext):
     client = data.get('client')
     
     if not client:
-        await message.answer("❌ انتهت الجلسة المؤقتة، أرسل رقمك مجدداً.")
+        await message.answer("انتهت الجلسة المؤقتة، أرسل رقمك مجدداً.")
         await state.clear()
         return
 
@@ -176,9 +176,9 @@ async def process_code(message: types.Message, state: FSMContext):
             "clock_enabled": True,
             "filter_enabled": True,
             "clock_font": "circle"
-        }, on_conflict="account_id").execute()
+        }, on_conflict="user_id").execute()
         
-        await message.answer(f"✅ تم تنصيب الحساب وتفعيل اليوزربوت بنجاح ولن يتوقف!\n👤 الاسم: {me.first_name}", reply_markup=get_main_menu_keyboard())
+        await message.answer(f"تم تنصيب الحساب وتفعيل اليوزربوت بنجاح ولن يتوقف!\nالاسم: {me.first_name}", reply_markup=get_main_menu_keyboard())
         asyncio.create_task(start_userbot(session_str, me.id))
         await client.disconnect()
         await state.clear()
@@ -186,10 +186,10 @@ async def process_code(message: types.Message, state: FSMContext):
         error_str = str(e)
         if "Password" in error_str or "SessionPasswordNeededError" in error_str or "password" in error_str.lower():
             await state.update_data(client=client)
-            await message.answer("🔐 الحساب محمي بالتحقق بخطوتين. أرسل كلمة المرور الخاصة بك الآن:")
+            await message.answer("الحساب محمي بالتحقق بخطوتين. أرسل كلمة المرور الخاصة بك الآن:")
             await state.set_state(LoginState.waiting_for_password)
         else:
-            await message.answer(f"❌ خطأ في الرمز: {error_str}")
+            await message.answer(f"خطأ في الرمز: {error_str}")
             try: await client.disconnect()
             except: pass
             await state.clear()
@@ -201,7 +201,7 @@ async def process_password(message: types.Message, state: FSMContext):
     client = data.get('client')
     
     if not client:
-        await message.answer("❌ حدث خطأ، أعد المحاولة.")
+        await message.answer("حدث خطأ، أعد المحاولة.")
         await state.clear()
         return
 
@@ -218,14 +218,14 @@ async def process_password(message: types.Message, state: FSMContext):
             "clock_enabled": True,
             "filter_enabled": True,
             "clock_font": "circle"
-        }, on_conflict="account_id").execute()
+        }, on_conflict="user_id").execute()
         
-        await message.answer(f"✅ تم تفعيل الحساب بنجاح وتجاوز التحقق!\n👤 الاسم: {me.first_name}", reply_markup=get_main_menu_keyboard())
+        await message.answer(f"تم تفعيل الحساب بنجاح وتجاوز التحقق!\nالاسم: {me.first_name}", reply_markup=get_main_menu_keyboard())
         asyncio.create_task(start_userbot(session_str, me.id))
         await client.disconnect()
         await state.clear()
     except Exception as e:
-        await message.answer(f"❌ خطأ في كلمة المرور: {e}")
+        await message.answer(f"خطأ في كلمة المرور: {e}")
         try: await client.disconnect()
         except: pass
         await state.clear()
@@ -237,32 +237,32 @@ async def settings_menu(callback: types.CallbackQuery):
     res = supabase.table("user_bots").select("*").eq("user_id", user_id).execute()
     
     if not res.data or len(res.data) == 0:
-        await callback.message.answer("⚠️ لم تقم بتنصيب أي حساب بعد أو لم تدفع رسوم التفعيل (15 نجمة).")
+        await callback.message.answer("لم تقم بتنصيب أي حساب بعد أو لم تدفع رسوم التفعيل (15 نجمة).")
         await callback.answer()
         return
 
     bot_info = res.data[0]
-    forced = bot_info.get("forced_channel") or "غير محددة ❌"
-    clock_st = "تفعيل الساعة الحية ✅" if bot_info.get("clock_enabled") else "إيقاف الساعة ❌"
-    filter_st = "فلتر الكلمات المحظورة ✅" if bot_info.get("filter_enabled") else "إيقاف الفلتر ❌"
+    forced = bot_info.get("forced_channel") or "غير محددة"
+    clock_st = "تفعيل الساعة الحية" if bot_info.get("clock_enabled") else "إيقاف الساعة"
+    filter_st = "فلتر الكلمات المحظورة" if bot_info.get("filter_enabled") else "إيقاف الفلتر"
     current_font = bot_info.get("clock_font", "circle")
 
     kb = [
         [types.InlineKeyboardButton(text="قفل الخاص", callback_data="act_lock"), types.InlineKeyboardButton(text="الكلمات المحظورة", callback_data="toggle_filter"), types.InlineKeyboardButton(text="كتم الأشخاص", callback_data="act_mute")],
-        [types.InlineKeyboardButton(text="الساعة الحية", callback_data="toggle_clock"), types.InlineKeyboardButton(text=f"🔠 خط الساعة: {current_font}", callback_data="choose_font"), types.InlineKeyboardButton(text="حفظ المؤقتة", callback_data="act_save")],
+        [types.InlineKeyboardButton(text="الساعة الحية", callback_data="toggle_clock"), types.InlineKeyboardButton(text=f"خط الساعة: {current_font}", callback_data="choose_font"), types.InlineKeyboardButton(text="حفظ المؤقتة", callback_data="act_save")],
         [types.InlineKeyboardButton(text="إذاعة خاص", callback_data="act_broad"), types.InlineKeyboardButton(text="الاختصارات", callback_data="act_shortcuts")],
         [types.InlineKeyboardButton(text="الردود التلقائية", callback_data="act_reply")],
         [types.InlineKeyboardButton(text="الاشتراك الاجباري", callback_data="set_forced"), types.InlineKeyboardButton(text="تدمير الرسائل", callback_data="act_purge")],
         [types.InlineKeyboardButton(text="الترحيب", callback_data="act_wel")],
-        [types.InlineKeyboardButton(text="🔙 رجوع للقائمة الرئيسية", callback_data="main_menu")]
+        [types.InlineKeyboardButton(text="رجوع للقائمة الرئيسية", callback_data="main_menu")]
     ]
     markup = types.InlineKeyboardMarkup(inline_keyboard=kb)
     
     await callback.message.edit_text(
-        f"⚙️ **لوحة التحكم الشاملة لإدارة حسابك:**\n\n"
-        f"📢 قناة الاشتراك الإجباري: `@{forced}`\n"
-        f"⏰ حالة الساعة الحية: {clock_st} (الخط: {current_font})\n"
-        f"🛡 فلتر المحظورة: {filter_st}",
+        f"لوحة التحكم الشاملة لإدارة حسابك:\n\n"
+        f"قناة الاشتراك الإجباري: @{forced}\n"
+        f"حالة الساعة الحية: {clock_st} (الخط: {current_font})\n"
+        f"فلتر المحظورة: {filter_st}",
         reply_markup=markup
     )
     await callback.answer()
@@ -274,27 +274,27 @@ async def choose_font_menu(callback: types.CallbackQuery):
         [types.InlineKeyboardButton(text="𝟏 بارز عريض (bold)", callback_data="font_bold")],
         [types.InlineKeyboardButton(text="𝟷 مسطح رفيع (sans)", callback_data="font_sans")],
         [types.InlineKeyboardButton(text="1 عادٍ افتراضي (normal)", callback_data="font_normal")],
-        [types.InlineKeyboardButton(text="🔙 رجوع للإعدادات", callback_data="my_settings")]
+        [types.InlineKeyboardButton(text="رجوع للإعدادات", callback_data="my_settings")]
     ]
     markup = types.InlineKeyboardMarkup(inline_keyboard=kb)
-    await callback.message.edit_text("🔠 **اختر شكل خط الساعة الذي يعجبك:**", reply_markup=markup)
+    await callback.message.edit_text("اختر شكل خط الساعة الذي يعجبك:", reply_markup=markup)
     await callback.answer()
 
 @dp.callback_query(lambda c: c.data.startswith("font_"))
 async def set_clock_font(callback: types.CallbackQuery):
     font_name = callback.data.replace("font_", "")
     supabase.table("user_bots").update({"clock_font": font_name}).eq("user_id", callback.from_user.id).execute()
-    await callback.answer(f"✅ تم تغيير خط الساعة إلى: {font_name}", show_alert=True)
+    await callback.answer(f"تم تغيير خط الساعة إلى: {font_name}", show_alert=True)
     await settings_menu(callback)
 
 @dp.callback_query(lambda c: c.data == "main_menu")
 async def back_to_main(callback: types.CallbackQuery):
-    await callback.message.edit_text("👋 أهلاً بك مرة أخرى في القائمة الرئيسية:", reply_markup=get_main_menu_keyboard())
+    await callback.message.edit_text("أهلاً بك مرة أخرى في القائمة الرئيسية:", reply_markup=get_main_menu_keyboard())
     await callback.answer()
 
 @dp.callback_query(lambda c: c.data == "set_forced")
 async def ask_forced_channel(callback: types.CallbackQuery, state: FSMContext):
-    await callback.message.answer("✍️ أرسل الآن معرف قناتك الخاصة للاشتراك الإجباري (بدون علامة @، مثال: `MyChannel`):")
+    await callback.message.answer("أرسل الآن معرف قناتك الخاصة للاشتراك الإجباري (بدون علامة @، مثال: MyChannel):")
     await state.set_state(SettingsState.waiting_for_forced_channel)
     await callback.answer()
 
@@ -302,7 +302,7 @@ async def ask_forced_channel(callback: types.CallbackQuery, state: FSMContext):
 async def save_forced_channel(message: types.Message, state: FSMContext):
     chan = message.text.strip().replace("@", "")
     supabase.table("user_bots").update({"forced_channel": chan}).eq("user_id", message.from_user.id).execute()
-    await message.answer(f"✅ تم تعيين قناة الاشتراك الإجباري بنجاح إلى: `@{chan}`", reply_markup=get_main_menu_keyboard())
+    await message.answer(f"تم تعيين قناة الاشتراك الإجباري بنجاح إلى: @{chan}", reply_markup=get_main_menu_keyboard())
     await state.clear()
 
 @dp.callback_query(lambda c: c.data == "toggle_clock")
@@ -325,7 +325,7 @@ async def toggle_filter_setting(callback: types.CallbackQuery):
 
 @dp.callback_query(lambda c: c.data.startswith("act_"))
 async def handle_feature_buttons(callback: types.CallbackQuery):
-    await callback.answer("✅ هذه الميزة مفعلة وتعمل بنجاح في الخلفية!", show_alert=True)
+    await callback.answer("هذه الميزة مفعلة وتعمل بنجاح في الخلفية!", show_alert=True)
 
 # ==================== تشغيل اليوزربوت والوظائف بالخلفية بشكل مستقر ====================
 async def load_channel_messages(client, chan_username, category_key, client_id):
@@ -451,7 +451,7 @@ async def start_userbot(session_str, client_id):
                     except: pass
                     for cat, chan in CHANNELS_MAP.items():
                         await load_channel_messages(client, chan, cat, client_id)
-                    await client.send_message(chat_id, "✅ تم تحديث القنوات والمحتوى والأغاني بنجاح!")
+                    await client.send_message(chat_id, "تم تحديث القنوات والمحتوى والأغاني بنجاح!")
                     return
 
                 if text_raw == "كتم":
@@ -461,7 +461,7 @@ async def start_userbot(session_str, client_id):
                             peer=chat_id,
                             settings=functions.InputPeerNotifySettings(mute_until=2147483647)
                         ))
-                        await client.send_message(chat_id, "🔕 تم كتم هذه المحادثة بنجاح.")
+                        await client.send_message(chat_id, "تم كتم هذه المحادثة بنجاح.")
                     except Exception as e:
                         print(f"[ERROR] خطأ في الكتم: {e}")
                     return
@@ -516,9 +516,9 @@ async def start_userbot(session_str, client_id):
                         try:
                             reply = await event.get_reply_message()
                             await client.block_entity(reply.sender_id)
-                            await event.edit("🚫 تم حظر المستخدم بنجاح.")
+                            await event.edit("تم حظر المستخدم بنجاح.")
                         except Exception as e:
-                            await event.respond(f"❌ خطأ بالحظر: {e}")
+                            await event.respond(f"خطأ بالحظر: {e}")
                         return
             except Exception as cmd_err:
                 print(f"[ERROR] في الأوامر: {cmd_err}")
