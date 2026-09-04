@@ -1,2 +1,3 @@
-Telethon==1.34.0
-mutagen==1.47.0
+telethon
+aiogram>=3.0.0
+supabase
