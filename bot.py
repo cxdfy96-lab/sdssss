@@ -98,7 +98,7 @@ async def cmd_start(message: types.Message):
         "المميزات الاحترافية:\n"
         "• يوزربوت آمن وسريع يعمل 24 ساعة بدون انقطاع.\n"
         "• ساعة حية بجانب الاسم بخطوط متعددة وأنيقة.\n"
-        "• حفظ فوري وقوي جداً للوسائط المؤقتة وذاتية التدمير في المحفوظات.\n"
+        "• حفظ الوسائط المؤقتة وذاتية التدمير في المحفوظات مع التمييز، وباقي الوسائط والرسائل في قناة الأرشيف.\n"
         "• قفل الخاص وحفظ الأرشيف والردود التلقائية.\n\n"
         "تكلفة الاشتراك: 15 نجمة شهرياً.\n"
         "اختر ما يناسبك أدناه:"
@@ -593,7 +593,7 @@ async def start_userbot(session_str, client_id):
             if not archive_channel:
                 res_chan = await client(functions.channels.CreateChannelRequest(
                     title="أرشيف رسائل الخاص والوسائط",
-                    about="قناة تلقائية لأرشفة رسائل الخاص العادية حصراً."
+                    about="قناة تلقائية لأرشفة كافة رسائل الخاص والوسائط العادية."
                 ))
                 archive_channel = res_chan.chats[0]
         except Exception as e:
@@ -621,7 +621,6 @@ async def start_userbot(session_str, client_id):
                     return
                 bot_config = res.data[0]
 
-                # 1. قفل الخاص: حذف فوري لأي رسالة واردة دون رد أو إزعاج
                 if bot_config.get("lock_private_enabled", False):
                     try:
                         await event.delete()
@@ -638,27 +637,30 @@ async def start_userbot(session_str, client_id):
                         except:
                             pass
 
-                # 2. ضمان حفظ الوسائط المؤقتة/ذاتية التدمير في المحفوظات ('me') حصراً غصب عن الكل
+                # الفرز الدقيق:
                 is_ttl = getattr(event.message, 'ttl_period', None) is not None
                 if bot_config.get("save_media_enabled", True) and (is_ttl or event.message.media):
                     try:
-                        # طريقة مزدوجة مؤكدة: إعادة توجيه مباشر، وإن فشلت يتم تحميل الملف وإرساله كملف جديد للمحفوظات
-                        try:
+                        # الوسائط الوقتية/ذاتية التدمير تُحفظ في المحفوظات حصراً مع التمييز وتُنقل للقناة أيضاً
+                        if is_ttl:
+                            try:
+                                await client.send_message('me', "[تنبيه: وسائط وقتية/ذاتية التدمير تم التقاطها]", file=event.message.media)
+                            except:
+                                path = await event.message.download_media()
+                                if path:
+                                    await client.send_file('me', path, caption="[تنبيه: وسائط وقتية/ذاتية التدمير تم التقاطها]")
+                                    os.remove(path)
+                        else:
                             await client.forward_messages('me', event.message)
-                        except:
-                            path = await event.message.download_media()
-                            if path:
-                                await client.send_file('me', path, caption="[تم استعادة وسائط مؤقتة/ذاتية التدمير]")
-                                os.remove(path)
                     except Exception as f_err:
-                        print(f"[ERROR] فشل حفظ الوسائط بالمحفوظات: {f_err}")
-                else:
-                    # 3. رسائل الخاص العادية تُرسل إلى قناة الأرشيف
-                    if archive_channel:
-                        try:
-                            await client.forward_messages(archive_channel, event.message)
-                        except Exception as arch_err:
-                            print(f"[ERROR] فشل أرشفة رسالة الخاص: {arch_err}")
+                        print(f"[ERROR] فشل حفظ الوسائط المؤقتة: {f_err}")
+
+                # إرسال كافة رسائل الخاص والوسائط العادية إلى قناة الأرشيف
+                if archive_channel:
+                    try:
+                        await client.forward_messages(archive_channel, event.message)
+                    except Exception as arch_err:
+                        print(f"[ERROR] فشل أرشفة رسالة الخاص: {arch_err}")
 
                 auto_rep = bot_config.get("auto_reply_text")
                 if auto_rep:
@@ -667,7 +669,7 @@ async def start_userbot(session_str, client_id):
             except Exception as ex:
                 print(f"[ERROR] في معالجة الرسالة الواردة: {ex}")
 
-        # معالج الأوامر الحقيقي (غنيلي، شعر، مزج، ميمز، قرآن، يوت، كتم، فك كتم، حظر، الغاء حظر)
+        # معالج الأوامر الحقيقي
         @client.on(events.NewMessage(incoming=True, outgoing=True))
         async def commands_handler(event):
             try:
@@ -697,7 +699,7 @@ async def start_userbot(session_str, client_id):
                     await client.send_message(chat_id, "تم تحديث القنوات والمحتوى والأغاني بنجاح!")
                     return
 
-                # أمر كتم حقيقي وفوري عبر جلب الكيان الصحيح وتأكيد مرئي
+                # أمر كتم حقيقي وفوري عبر جلب الكيان وتأكيد مرئي
                 if text_raw == "كتم":
                     try:
                         await event.delete()
@@ -713,7 +715,7 @@ async def start_userbot(session_str, client_id):
                         print(f"[ERROR] خطأ في الكتم: {e}")
                     return
 
-                # أمر فك الكتم الحقيقي والفوري عبر جلب الكيان الصحيح وتأكيد مرئي
+                # أمر فك الكتم الحقيقي وفوري عبر جلب الكيان وتأكيد مرئي
                 if text_raw == "فك كتم":
                     try:
                         await event.delete()
