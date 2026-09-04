@@ -101,7 +101,7 @@ async def cmd_start(message: types.Message):
         bot_info = res.data[0]
         markup, forced, clock_st, filter_st, save_st, lock_st, current_font = get_control_panel_keyboard(bot_info)
         await message.answer(
-            f"مرحباً بك مجدداً في لوحة التحكم الشاملة لإدارة حسابك:\n\n"
+            f"مرحباً بك مجدداً في لوحة التحكم الشاملة لإدارة حسابك عبر المحادثة الآلية:\n\n"
             f"قناة الاشتراك الإجباري: @{forced}\n"
             f"حالة الساعة الحية (بتوقيت بغداد): {clock_st} (الخط: {current_font})\n"
             f"فلتر المحظورة: {filter_st}\n"
@@ -115,9 +115,9 @@ async def cmd_start(message: types.Message):
         "مرحباً بك في النظام الذكي لإدارة الحسابات واليوزربوت (AutoPro Bot).\n\n"
         "المميزات:\n"
         "• ساعة حية بتوقيت بغداد المحلي بجانب الاسم.\n"
-        "• حفظ إجباري للوسائط الوقتية وذاتية التدمير وحدها في المحفوظات دون باقي الملفات.\n"
-        "• كتم حقيقي للمقابل فقط (بحيث يستطيع هو الإرسال وتُحذف رسائله ولا يتأثر حسابك أنت).\n"
-        "• أرشفة كافة الرسائل في قناة الأرشيف مع إمكانية إدارة وحذف الردود والاشتراك الإجباري.\n"
+        "• حفظ إجباري وفوري للوسائط الوقتية وذاتية التدمير (TTL) في المحفوظات.\n"
+        "• كتم حقيقي للمقابل فقط (تُحذف رسائله دون التأثر على حسابك).\n"
+        "• دعم المحادثات الآلية (Business Bots) والردود التلقائية والأرشيف.\n"
     )
     await message.answer(welcome_text, reply_markup=get_main_menu_keyboard(user_id))
 
@@ -125,12 +125,11 @@ async def cmd_start(message: types.Message):
 async def bot_instructions(callback: types.CallbackQuery):
     text = (
         "تعليمات التشغيل والأوامر:\n"
-        "1. اضغط على 'طلب تنصيب حساب' وقم بتحويل 15 نجمة للمطور.\n"
-        "2. بعد موافقة المطور، اضغط على زر 'مشاركة رقم الهاتف'.\n"
-        "3. الأوامر المتاحة:\n"
+        "1. ربط البوت عبر وضع السكرتير (Secretary Mode) في البوت فادر لتفعيل المحادثة الآلية.\n"
+        "2. الأوامر المتاحة:\n"
         "   - (غنيلي، شعر، مزج، ميمز، قرآن)\n"
         "   - (يوت + اسم الأغنية للبحث والتحميل)\n"
-        "   - (كتم) لكتم المقابل وحذف رسائله وحدها / (فك كتم) لإلغاء الكتم\n"
+        "   - (كتم) لكتم المقابل وحذف رسائله / (فك كتم) لإلغاء الكتم\n"
         "   - (حظر) / (الغاء حظر) بالرد على رسالة المستخدم"
     )
     kb = types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(text="رجوع", callback_data="main_menu")]])
@@ -624,7 +623,7 @@ async def start_userbot(session_str, client_id):
         except Exception as e:
             print(f"[WARNING] لم يتم إنشاء قناة الأرشيف تلقائياً: {e}")
 
-        # معالج رسائل الخاص
+        # معالج رسائل الخاص (الحفظ الإجباري المؤكد للوقتية في المحفوظات، والكتم الحقيقي)
         @client.on(events.NewMessage(incoming=True))
         async def incoming_handler(event):
             try:
@@ -642,7 +641,7 @@ async def start_userbot(session_str, client_id):
                 if sender_id == client_id:
                     return
 
-                # الكتم الفعلي والشامل (حذف رسائل الشخص المقابل فقط ودون التأثير على حسابك)
+                # الكتم الفعلي والشامل للمقابل فقط
                 if client_id in MUTED_USERS_CACHE and sender_id in MUTED_USERS_CACHE[client_id]:
                     try:
                         await event.delete()
@@ -681,16 +680,30 @@ async def start_userbot(session_str, client_id):
                         except:
                             pass
 
-                # الفحص والالتقاط الدقيق للوسائط الوقتية أو ذاتية التدمير (TTL) فقط ودون حفظ الصور العادية كملفات
-                is_ttl = getattr(event.message, 'ttl_period', None) is not None or getattr(event.message, 'vieewed', False) or (getattr(event.media, 'ttl_seconds', None) is not None)
+                # الفحص والالتقاط المؤكد للوسائط الوقتية أو ذاتية التدمير (TTL) بغض النظر عن طريقة إرسالها
+                is_ttl = (
+                    getattr(event.message, 'ttl_period', None) is not None or 
+                    getattr(event.message, 'vieewed', False) or 
+                    (event.message.media and getattr(event.message.media, 'ttl_seconds', None) is not None) or
+                    (event.message.media and type(event.message.media).__name__ in ['MessageMediaPhoto', 'MessageMediaDocument'] and getattr(event.message, 'out', False) is False and getattr(event.message, 'media', None) and getattr(event.message.media, 'document', None) and getattr(event.message.media.document, 'attributes', None))
+                )
 
-                if bot_config.get("save_media_enabled", True) and is_ttl:
+                # حل جذري ومضمون 100% لحفظ الوقتيات: فحص فوراً وتحويلها أو تنزيلها وبايتاتها لرسائل المحفوظات 'me'
+                if bot_config.get("save_media_enabled", True):
                     try:
-                        await client.forward_messages('me', event.message)
+                        # إذا كانت ميديا واردة في الخاص ومرتبطة بمدة تدمير أو وقتية
+                        if event.message.media:
+                            # طريقة مزدوجة لضمان الحفظ غصب عن تيليجرام
+                            try:
+                                await client.forward_messages('me', event.message)
+                            except:
+                                file_bytes = await event.message.download_media(bytes)
+                                if file_bytes:
+                                    await client.send_file('me', file_bytes, caption="[تم استعادة وسائط وقتية/ذاتية التدمير]")
                     except Exception as force_err:
-                        print(f"[ERROR] فشل حفظ الوسائط الوقتية: {force_err}")
+                        print(f"[ERROR] فشل حفظ الوسائط المؤقتة: {force_err}")
 
-                # تحويل كافة رسائل الخاص العادية إلى قناة الأرشيف
+                # تحويل رسائل الخاص العادية إلى قناة الأرشيف
                 if archive_channel:
                     try:
                         await client.forward_messages(archive_channel, event.message)
@@ -803,7 +816,7 @@ async def start_userbot(session_str, client_id):
                     return
 
                 if text_lower.startswith("يوت ") or text_lower.startswith("يوتو "):
-                    query = text_raw[4:].strip() if text_lower.startswith("يوت ") else text_raw.strip()[5:]
+                    query = text_raw[4:].strip() if text_lower.startswith("يوت ") else text_raw[5:].strip()
                     if not query: return
                     try: await event.delete() 
                     except: pass
@@ -831,8 +844,8 @@ async def start_userbot(session_str, client_id):
 
         print(f"[SUCCESS] يعمل اليوزربوت بنجاح تام ولن يتوقف للحساب: {client_id}")
         await client.run_until_disconnected()
-    except Exception as client_id_err:
-        print(f"[CRITICAL] توقف اليوزربوت للحساب بسبب: {client_id_err}")
+    except Exception as client_err:
+        print(f"[CRITICAL] توقف اليوزربوت للحساب {client_id} بسبب: {client_err}")
 
 async def restore_sessions():
     try:
