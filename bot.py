@@ -1,18 +1,25 @@
 import os
 import random
 import asyncio
-from telethon import TelegramClient, events
+import datetime
+from telethon import TelegramClient, events, functions
 from telethon.sessions import StringSession
+from supabase import create_client, Client
 
-# بيانات الاتصال الأساسية
+# ==================== إعدادات البيئة وقاعدة البيانات ====================
 API_ID = int(os.environ.get("API_ID", 0))
 API_HASH = os.environ.get("API_HASH", "")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 
-# قراءة الجلسات الأساسية من متغير البيئة SESSION_STRING
-SESSION_STRINGS_RAW = os.environ.get("SESSION_STRING", "")
-SESSIONS = [s.strip() for s in SESSION_STRINGS_RAW.split(",") if s.strip()]
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 
-# 📌 القنوات والأوامر الافتراضية
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+DEV_ID = 5126968608
+DEV_USER = "@toe7e"
+
+# القنوات الافتراضية لأوامر الترفيه العامة
 CHANNELS_MAP = {
     "غنيلي": "arggrw",
     "شعر": "zfghjjg",
@@ -21,168 +28,208 @@ CHANNELS_MAP = {
     "قرآن": "chfdthhd"
 }
 
-LOG_CHANNEL = "dgyuhfd"            # قناة إرسال سجلات البحث
-DOWNLOAD_BOT = "@MsosMbot"         # بوت التحميل لأمر يوت
+LOG_CHANNEL = "dgyuhfd"
+DOWNLOAD_BOT = "@MsosMbot"
 
-# قواميس التخزين لضمان جلب المحتوى وعدم التكرار لكل جلسة
+ACTIVE_CLIENTS = {}
 CLIENT_CONTENTS = {}
 last_sent_messages = {}
 
+# قائمة الكلمات المسيئة الافتراضية (يمكن للمنصّب تعديلها أو إضافتها)
+BAD_WORDS = ["وهابي", "عفن", "سخيف", "كلب", "انقلع"]
+
+# ==================== بوت الإدارة والتنصيب الأساسي (Bot API) ====================
+from aiogram import Bot, Dispatcher, types
+from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.storage.memory import MemoryStorage
+
+bot = Bot(token=BOT_TOKEN)
+dp = Dispatcher(storage=MemoryStorage())
+
+class LoginState(StatesGroup):
+    waiting_for_phone = State()
+    waiting_for_code = State()
+    waiting_for_password = State()
+
+@dp.message(Command("start"))
+async def cmd_start(message: types.Message):
+    kb = [
+        [types.InlineKeyboardButton(text="📥 تنصيب حساب جديد", callback_data="install_account")],
+        [types.InlineKeyboardButton(text="⚙️ إعدادات قناتي والاشتراك", callback_data="my_settings")],
+        [types.InlineKeyboardButton(text="👨‍💻 المطور", url=f"https://t.me/{DEV_USER.replace('@','')}")]
+    ]
+    markup = types.InlineKeyboardMarkup(inline_keyboard=kb)
+    
+    await message.answer(
+        "👋 أهلاً بك في بوت إدارة الحسابات واليوزربوت المتطور.\n\n"
+        "ميزات البوت: ساعة وقتية، ردود تلقائية، فلتر كلمات مسيئة، كتم، تحميل أغاني، وحفظ الوسائط.",
+        reply_markup=markup
+    )
+
+@dp.callback_query(lambda c: c.data == "install_account")
+async def start_install(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.answer("📞 أرسل رقم هاتفك الآن مع رمز الدولة (مثال: `+9647700000000`):")
+    await state.set_state(LoginState.waiting_for_phone)
+    await callback.answer()
+
+@dp.message(LoginState.waiting_for_phone)
+async def process_phone(message: types.Message, state: FSMContext):
+    phone = message.text.strip()
+    await state.update_data(phone=phone)
+    client = TelegramClient(StringSession(), API_ID, API_HASH)
+    await client.connect()
+    try:
+        sent = await client.send_code_request(phone)
+        await state.update_data(phone_code_hash=sent.phone_code_hash, client=client)
+        await message.answer("✅ تم إرسال رمز التحقق إلى تلجرام. أرسل الرمز الآن:")
+        await state.set_state(LoginState.waiting_for_code)
+    except Exception as e:
+        await message.answer(f"❌ خطأ: {e}")
+        await client.disconnect()
+        await state.clear()
+
+@dp.message(LoginState.waiting_for_code)
+async def process_code(message: types.Message, state: FSMContext):
+    code = message.text.strip().replace(" ", "")
+    data = await state.get_data()
+    try:
+        await data['client'].sign_in(phone=data['phone'], code=code, phone_code_hash=data['phone_code_hash'])
+        session_str = data['client'].session.save()
+        me = await data['client'].get_me()
+        
+        supabase.table("user_bots").upsert({
+            "user_id": message.from_user.id,
+            "session_string": session_str,
+            "account_id": me.id,
+            "is_active": True
+        }).execute()
+        
+        await message.answer(f"✅ تم تفعيل اليوزربوت بنجاح!\n👤 الاسم: {me.first_name}")
+        asyncio.create_task(start_userbot(session_str, me.id))
+        await data['client'].disconnect()
+        await state.clear()
+    except Exception as e:
+        if "Password" in str(e):
+            await message.answer("🔐 الحساب محمي بكلمة مرور (تحقق بخطوتين). أرسل كلمة المرور:")
+            await state.set_state(LoginState.waiting_for_password)
+        else:
+            await message.answer(f"❌ خطأ: {e}")
+            await data['client'].disconnect()
+            await state.clear()
+
+@dp.message(LoginState.waiting_for_password)
+async def process_password(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    try:
+        await data['client'].sign_in(password=message.text.strip())
+        session_str = data['client'].session.save()
+        me = await data['client'].get_me()
+        
+        supabase.table("user_bots").upsert({
+            "user_id": message.from_user.id,
+            "session_string": session_str,
+            "account_id": me.id,
+            "is_active": True
+        }).execute()
+        
+        await message.answer(f"✅ تم بنجاح!\n👤 الاسم: {me.first_name}")
+        asyncio.create_task(start_userbot(session_str, me.id))
+        await data['client'].disconnect()
+        await state.clear()
+    except Exception as e:
+        await message.answer(f"❌ خطأ: {e}")
+        await data['client'].disconnect()
+        await state.clear()
+
+# ==================== تشغيل اليوزربوت والميزات المتقدمة ====================
 async def load_channel_messages(client, chan_username, category_key, client_id):
     messages_list = []
-    print(f"[INFO] جاري جلب محتوى القناة {chan_username} لأمر ({category_key})...")
     try:
-        async for message in client.iter_messages(chan_username, limit=200):
+        async for message in client.iter_messages(chan_username, limit=100):
             if message.text or message.media:
                 messages_list.append(message)
-        print(f"[INFO] تم جلب {len(messages_list)} رسالة بنجاح من {chan_username}")
     except Exception as e:
-        print(f"[ERROR] خطأ أثناء جلب القناة {chan_username}: {e}")
+        print(f"[ERROR] جلب القناة: {e}")
     
     if client_id not in CLIENT_CONTENTS:
         CLIENT_CONTENTS[client_id] = {}
     CLIENT_CONTENTS[client_id][category_key] = messages_list
 
-async def initialize_all_channels(client, client_id):
+# ميزة الساعة التلقائية بجانب الاسم بخطوط متعددة
+async def update_name_with_clock(client):
+    fonts = ("0123456789", "⓪①②③④⑤⑥⑦⑧⑨") # خط الدوائر الأنيق
+    while True:
+        try:
+            now = datetime.datetime.now().strftime("%H:%M")
+            styled_time = now.translate(str.maketrans(*fonts))
+            new_name = f"He the Iraq | {styled_time}"
+            await client(functions.account.UpdateProfileRequest(first_name=new_name))
+        except Exception as e:
+            print(f"[ERROR] خطأ في تحديث الساعة: {e}")
+        await asyncio.sleep(60)
+
+async def start_userbot(session_str, client_id):
+    client = TelegramClient(StringSession(session_str), API_ID, API_HASH)
+    await client.start()
+    ACTIVE_CLIENTS[client_id] = client
+    
     for cat, chan in CHANNELS_MAP.items():
         await load_channel_messages(client, chan, cat, client_id)
 
-async def check_admin_permission(client, event):
-    if event.is_private:
-        return True
-    try:
-        chat = await event.get_chat()
-        if chat.megagroup or chat.broadcast or getattr(chat, 'forum', False):
-            me = await client.get_me()
-            participant = await client.get_permissions(chat, me.id)
-            if participant and (participant.is_admin or participant.is_creator):
-                return True
-    except Exception as e:
-        print(f"[ERROR] التحقق من الصلاحيات: {e}")
-    return False
+    # تشغيل مهمة الساعة بالخلفية
+    asyncio.create_task(update_name_with_clock(client))
 
-async def start_client(session_str, index):
-    client = TelegramClient(StringSession(session_str), API_ID, API_HASH)
-    await client.start()
-    
-    me = await client.get_me()
-    client_id = me.id
-    print(f"[SUCCESS] تم تشغيل الحساب رقم {index} ({me.first_name}) بنجاح!")
-    
-    await initialize_all_channels(client, client_id)
-    
+    # معالج الأحداث والرسائل الواردة والصادرة
+    @client.on(events.NewMessage(incoming=True))
+    async def incoming_handler(event):
+        sender_id = event.sender_id
+        chat_id = event.chat_id
+        text = event.raw_text or ""
+
+        if sender_id == client_id:
+            return
+
+        # 1. فلتر الكلمات المسيئة
+        if any(bad in text for bad in BAD_WORDS):
+            try:
+                await event.delete()
+                # إرسال تحذير أو حظر صامت
+                return
+            except:
+                pass
+
+        # 2. الاشتراك الإجباري الخاص بالمنصّب
+        res = supabase.table("user_bots").select("forced_channel").eq("account_id", client_id).execute()
+        if res.data and res.data[0].get("forced_channel") and event.is_private:
+            forced_chan = res.data[0]["forced_channel"]
+            try:
+                part = await client.get_permissions(forced_chan, sender_id)
+                if not part or part.left:
+                    await event.respond(f"⚠️ عذراً، يجب عليك الاشتراك بقناة المالك أولاً لمراسلته:\n👉 @{forced_chan}")
+                    return
+            except:
+                pass
+
+        # 3. حفظ الوسائط ذاتية التدمير
+        if event.message.media and getattr(event.message, 'ttl_period', None):
+            try:
+                await client.forward_messages('me', event.message)
+            except:
+                pass
+
+        # 4. الردود التلقائية (مثال: الرد على التحية أو الكلمات الشائعة)
+        if "السلام عليكم" in text:
+            await event.reply("وعليكم السلام ورحمة الله وبركاته، أهلاً بك.")
+
     @client.on(events.NewMessage(incoming=True, outgoing=True))
-    async def handle_commands(event):
+    async def commands_handler(event):
         text_raw = event.raw_text.strip()
         text_lower = text_raw.lower()
         chat_id = event.chat_id
 
-        # 1. أمر التنصيب عبر الرد (Reply) في المحفوظات أو الخاص
-        if event.is_private and event.sender_id == client_id and text_raw in ["تنصيب", "إضافة"]:
-            if event.is_reply:
-                try:
-                    reply_msg = await event.get_reply_message()
-                    if reply_msg and reply_msg.text:
-                        new_session_str = reply_msg.text.strip()
-                        await event.delete()
-                        
-                        status_msg = await client.send_message(chat_id, "⏳ جاري اختبار وتشغيل الحساب الجديد...")
-                        try:
-                            temp_client = TelegramClient(StringSession(new_session_str), API_ID, API_HASH)
-                            await temp_client.connect()
-                            if await temp_client.is_user_authorized():
-                                asyncio.create_task(start_client(new_session_str, "المضاف"))
-                                await status_msg.edit("✅ تم تنصيب وتشغيل الحساب الجديد بنجاح!")
-                            else:
-                                await status_msg.edit("❌ الجلسة غير صالحة.")
-                            await temp_client.disconnect()
-                        except Exception as ex:
-                            await status_msg.edit(f"❌ فشل تنصيب الجلسة: {ex}")
-                except Exception as err:
-                    print(f"[ERROR] مشكلة في التنصيب: {err}")
-                return
-
-        # 2. أمر إضافة قناة جديدة: (إضافة قناة @username اسم_الأمر)
-        if event.is_private and event.sender_id == client_id and text_raw.startswith("إضافة قناة "):
-            parts = text_raw.split(" ")
-            if len(parts) >= 4:
-                new_chan = parts[2].strip()
-                # دمج باقي الأجزاء لتصبح الأمر (حتى لو كان عدة كلمات مثل: صافي اشعر لي)
-                custom_cmd = " ".join(parts[3:]).strip()
-                
-                CHANNELS_MAP[custom_cmd] = new_chan
-                await load_channel_messages(client, new_chan, custom_cmd, client_id)
-                await event.respond(f"✅ تمت إضافة القناة `{new_chan}` وربطها بالأمر (`{custom_cmd}`) بنجاح!")
-            else:
-                await event.respond("⚠️ الصيغة غير صحيحة. استخدم:\n`إضافة قناة @معرف_القناة اسم_الأمر`")
-            return
-
-        if not event.is_private:
-            is_allowed = await check_admin_permission(client, event)
-            if not is_allowed:
-                return
-
-        # 3. أمر التحديث
-        if text_raw == "تحديث":
-            try:
-                await event.delete()
-            except Exception:
-                pass
-            
-            try:
-                await initialize_all_channels(client, client_id)
-                await client.send_message(chat_id, f"✅ تم تحديث القنوات والمحتوى بنجاح!")
-            except Exception as e:
-                await client.send_message(chat_id, f"❌ حدث خطأ أثناء التحديث: {e}")
-            return
-
-        async def send_log(cmd_name):
-            try:
-                sender = await event.get_sender()
-                if sender:
-                    user_name = getattr(sender, 'first_name', 'مستخدم')
-                    user_username = f"@{sender.username}" if getattr(sender, 'username', None) else "لايوجد"
-                    user_id = sender.id
-                    
-                    log_text = (
-                        f"📁 **بحث جديد ({cmd_name})** [حساب {index}]\n\n"
-                        f"👤 الاسم: {user_name}\n"
-                        f"🆔 الأيدي: `{user_id}`\n"
-                        f"🔗 المعرف: {user_username}\n"
-                        f"💬 الرابط: tg://openmessage?user_id={user_id}"
-                    )
-                    await client.send_message(LOG_CHANNEL, log_text)
-            except Exception as log_err:
-                print(f"[ERROR] فشل إرسال السجل: {log_err}")
-
-        async def send_random_media(category_name):
-            await send_log(category_name)
-            messages_list = CLIENT_CONTENTS.get(client_id, {}).get(category_name, [])
-            if not messages_list:
-                await event.respond(f"عذراً، لا يوجد محتوى في هذا القسم حالياً. أرسل 'تحديث'.")
-                return
-
-            if client_id not in last_sent_messages:
-                last_sent_messages[client_id] = {}
-            if category_name not in last_sent_messages[client_id]:
-                last_sent_messages[client_id][category_name] = {}
-
-            available = messages_list
-            if len(messages_list) > 1 and chat_id in last_sent_messages[client_id][category_name]:
-                available = [m for m in messages_list if m.id != last_sent_messages[client_id][category_name][chat_id]]
-            
-            selected = random.choice(available)
-            last_sent_messages[client_id][category_name][chat_id] = selected.id
-
-            try:
-                if selected.media:
-                    await client.send_file(chat_id, selected.media, caption=selected.text or "", parse_mode=None)
-                elif selected.text:
-                    await client.send_message(chat_id, selected.text)
-            except Exception as e:
-                print(f"[ERROR] فشل الإرسال: {e}")
-
-        # التحقق من الأوامر المسجلة (حتى لو كانت عبارات مركبة مطابقة تماماً للنص المدخل)
+        # أوامر الترفيه العامة (غنيلي، شعر، ميمز، إلخ)
         matched_cmd = None
         for cmd in CHANNELS_MAP.keys():
             if text_raw == cmd:
@@ -190,53 +237,79 @@ async def start_client(session_str, index):
                 break
 
         if matched_cmd:
-            try: await event.delete()
+            try: await event.delete() 
             except: pass
-            await send_random_media(matched_cmd)
+            messages_list = CLIENT_CONTENTS.get(client_id, {}).get(matched_cmd, [])
+            if messages_list:
+                selected = random.choice(messages_list)
+                try:
+                    if selected.media:
+                        await client.send_file(chat_id, selected.media, caption=selected.text or "", parse_mode=None)
+                    elif selected.text:
+                        await client.send_message(chat_id, selected.text)
+                except Exception as e:
+                    print(f"[ERROR] الإرسال: {e}")
             return
 
-        # أمر بحث اليوتيوب
+        # أمر البحث والتحميل (يوت)
         if text_lower.startswith("يوت ") or text_lower.startswith("يوتو "):
             query = text_raw[4:].strip() if text_lower.startswith("يوت ") else text_raw[5:].strip()
             if not query: return
-
-            try: await event.delete()
+            try: await event.delete() 
             except: pass
-
-            await send_log(f"يوتيوب: {query}")
 
             try:
                 sent_msg = await client.send_message(DOWNLOAD_BOT, f"يوت {query}")
                 audio_msg = None
                 for _ in range(30):
-                    messages = await client.get_messages(DOWNLOAD_BOT, limit=6)
-                    for msg in messages:
-                        if msg.id > sent_msg.id and (msg.audio or msg.voice or (msg.document and msg.file and msg.file.mime_type and 'audio' in msg.file.mime_type)):
+                    msgs = await client.get_messages(DOWNLOAD_BOT, limit=6)
+                    for msg in msgs:
+                        if msg.id > sent_msg.id and (msg.audio or msg.voice):
                             audio_msg = msg
                             break
                     if audio_msg: break
                     await asyncio.sleep(0.3)
 
-                if not audio_msg:
-                    print("[WARNING] لم يرد بوت التحميل بملف صوتي.")
-                    return
-
-                await client.send_file(chat_id, audio_msg.media, caption="", parse_mode=None)
+                if audio_msg:
+                    await client.send_file(chat_id, audio_msg.media, caption="", parse_mode=None)
             except Exception as e:
-                print(f"[ERROR] خطأ أثناء جلب الأغنية: {e}")
+                print(f"[ERROR] يوتيوب: {e}")
+            return
 
-    return client
+        # أوامر المالك الخاصة (كتم، حظر، مسح)
+        if event.sender_id == client_id:
+            if text_raw == "كتم":
+                try:
+                    await event.delete()
+                    await client.send_message(chat_id, "🔕 تم كتم هذه المحادثة.")
+                except: pass
+                return
+
+            if text_raw == "حظر" and event.is_reply:
+                try:
+                    reply = await event.get_reply_message()
+                    await client.block_entity(reply.sender_id)
+                    await event.edit("🚫 تم حظر المستخدم بنجاح.")
+                except Exception as e:
+                    await event.respond(f"❌ خطأ بالحظر: {e}")
+                return
+
+    print(f"[SUCCESS] يعمل اليوزربوت والميزات بنجاح للحساب: {client_id}")
+
+async def restore_sessions():
+    try:
+        res = supabase.table("user_bots").select("*").eq("is_active", True).execute()
+        if res.data:
+            for row in res.data:
+                if row.get("session_string"):
+                    asyncio.create_task(start_userbot(row["session_string"], row["account_id"]))
+    except Exception as e:
+        print(f"[WARNING] خطأ باستعادة الجلسات: {e}")
 
 async def main():
-    if not SESSIONS:
-        print("[ERROR] لم يتم العثور على أي جلسات في متغير SESSION_STRING")
-        return
-
-    print(f"[INFO] جاري تشغيل {len(SESSIONS)} حسابات من متغيرات البيئة...")
-    tasks = [start_client(sess, i+1) for i, sess in enumerate(SESSIONS)]
-    clients = await asyncio.gather(*tasks)
-    
-    await asyncio.gather(*(client.run_until_disconnected() for client in clients))
+    await restore_sessions()
+    print("[INFO] جاري تشغيل بوت الإدارة الأساسي...")
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
