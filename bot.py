@@ -67,6 +67,23 @@ def get_main_menu_keyboard():
     ]
     return types.InlineKeyboardMarkup(inline_keyboard=kb)
 
+def get_control_panel_keyboard(bot_info):
+    forced = bot_info.get("forced_channel") or "غير محددة"
+    clock_st = "تفعيل الساعة الحية" if bot_info.get("clock_enabled") else "إيقاف الساعة"
+    filter_st = "فلتر الكلمات المحظورة" if bot_info.get("filter_enabled") else "إيقاف الفلتر"
+    current_font = bot_info.get("clock_font", "circle")
+
+    kb = [
+        [types.InlineKeyboardButton(text="قفل الخاص", callback_data="act_lock"), types.InlineKeyboardButton(text="الكلمات المحظورة", callback_data="toggle_filter"), types.InlineKeyboardButton(text="كتم الأشخاص", callback_data="act_mute")],
+        [types.InlineKeyboardButton(text=f"الساعة الحية: {clock_st}", callback_data="toggle_clock"), types.InlineKeyboardButton(text=f"خط الساعة: {current_font}", callback_data="choose_font"), types.InlineKeyboardButton(text="حفظ المؤقتة", callback_data="act_save")],
+        [types.InlineKeyboardButton(text="إذاعة خاص", callback_data="act_broad"), types.InlineKeyboardButton(text="الاختصارات", callback_data="act_shortcuts")],
+        [types.InlineKeyboardButton(text="الردود التلقائية", callback_data="act_reply")],
+        [types.InlineKeyboardButton(text="الاشتراك الاجباري", callback_data="set_forced"), types.InlineKeyboardButton(text="تدمير الرسائل", callback_data="act_purge")],
+        [types.InlineKeyboardButton(text="الترحيب", callback_data="act_wel")],
+        [types.InlineKeyboardButton(text="رجوع للقائمة الرئيسية", callback_data="main_menu")]
+    ]
+    return types.InlineKeyboardMarkup(inline_keyboard=kb), forced, clock_st, filter_st, current_font
+
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     await message.answer(
@@ -112,18 +129,16 @@ async def admin_approve_reject(callback: types.CallbackQuery):
     target_user_id = int(parts[1])
     
     if action == "approve":
-        # تخزين أو تحديث حالة الموافقة للمستخدم المستهدف
         supabase.table("user_bots").upsert({
             "user_id": target_user_id,
             "is_approved": True,
             "session_string": "",
             "account_id": target_user_id
-        }, on_conflict="account_id").execute()
+        }, on_conflict="user_id").execute()
         
         try:
-            # إنشاء زر مشاركة جهة الاتصال التلقائي
             contact_kb = types.ReplyKeyboardMarkup(
-                keyboard=[[types.KeyboardButton(text="📱 مشاركة رقم الهاتف", request_contact=True)]],
+                keyboard=[[types.KeyboardButton(text="مشاركة رقم الهاتف", request_contact=True)]],
                 resize_keyboard=True,
                 one_time_keyboard=True
             )
@@ -144,7 +159,6 @@ async def admin_approve_reject(callback: types.CallbackQuery):
         await callback.message.edit_text(f"تم رفض المستخدم {target_user_id}.")
     await callback.answer()
 
-# استقبال رقم الهاتف عبر زر مشاركة جهة الاتصال أو كتابة يدوية
 @dp.message(lambda message: message.contact or (message.text and message.text.startswith("+")))
 async def handle_phone_input(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
@@ -165,7 +179,6 @@ async def handle_phone_input(message: types.Message, state: FSMContext):
         sent = await client.send_code_request(phone)
         await state.update_data(phone_code_hash=sent.phone_code_hash, client=client)
         
-        # إخفاء كيبورد مشاركة الاتصال وإرسال رسالة طلب الرمز
         remove_kb = types.ReplyKeyboardRemove()
         await message.answer("تم إرسال رمز التحقق إلى تلجرام. أرسل الرمز الآن:", reply_markup=remove_kb)
         await state.set_state(LoginState.waiting_for_code)
@@ -193,7 +206,7 @@ async def process_code(message: types.Message, state: FSMContext):
         session_str = client.session.save()
         me = await client.get_me()
         
-        supabase.table("user_bots").upsert({
+        bot_data = {
             "user_id": message.from_user.id,
             "session_string": session_str,
             "account_id": me.id,
@@ -202,9 +215,14 @@ async def process_code(message: types.Message, state: FSMContext):
             "filter_enabled": True,
             "clock_font": "circle",
             "is_approved": True
-        }, on_conflict="account_id").execute()
+        }
+        supabase.table("user_bots").upsert(bot_data, on_conflict="user_id").execute()
         
-        await message.answer(f"تم تنصيب الحساب وتفعيل اليوزربوت بنجاح ولن يتوقف!\nالاسم: {me.first_name}", reply_markup=get_main_menu_keyboard())
+        markup, forced, clock_st, filter_st, current_font = get_control_panel_keyboard(bot_data)
+        await message.answer(
+            f"تم تنصيب الحساب وتفعيل اليوزربوت بنجاح ولن يتوقف!\nالاسم: {me.first_name}\n\nإليك لوحة التحكم الشاملة لإدارة حسابك:",
+            reply_markup=markup
+        )
         asyncio.create_task(start_userbot(session_str, me.id))
         await client.disconnect()
         await state.clear()
@@ -236,7 +254,7 @@ async def process_password(message: types.Message, state: FSMContext):
         session_str = client.session.save()
         me = await client.get_me()
         
-        supabase.table("user_bots").upsert({
+        bot_data = {
             "user_id": message.from_user.id,
             "session_string": session_str,
             "account_id": me.id,
@@ -245,9 +263,14 @@ async def process_password(message: types.Message, state: FSMContext):
             "filter_enabled": True,
             "clock_font": "circle",
             "is_approved": True
-        }, on_conflict="account_id").execute()
+        }
+        supabase.table("user_bots").upsert(bot_data, on_conflict="user_id").execute()
         
-        await message.answer(f"تم تفعيل الحساب بنجاح وتجاوز التحقق!\nالاسم: {me.first_name}", reply_markup=get_main_menu_keyboard())
+        markup, forced, clock_st, filter_st, current_font = get_control_panel_keyboard(bot_data)
+        await message.answer(
+            f"تم تفعيل الحساب بنجاح وتجاوز التحقق!\nالاسم: {me.first_name}\n\nإليك لوحة التحكم الشاملة لإدارة حسابك:",
+            reply_markup=markup
+        )
         asyncio.create_task(start_userbot(session_str, me.id))
         await client.disconnect()
         await state.clear()
@@ -261,7 +284,7 @@ async def process_password(message: types.Message, state: FSMContext):
 @dp.callback_query(lambda c: c.data == "my_settings")
 async def settings_menu(callback: types.CallbackQuery):
     user_id = callback.from_user.id
-    res = supabase.table("user_bots").select("*").eq("user_id", user_id).execute()
+    res = supabase.table("user_bots").select("*").or_(f"user_id.eq.{user_id},account_id.eq.{user_id}").execute()
     
     if not res.data or len(res.data) == 0:
         await callback.message.answer("لم تقم بتنصيب أي حساب بعد أو لم تدفع رسوم التفعيل (15 نجمة).")
@@ -269,21 +292,7 @@ async def settings_menu(callback: types.CallbackQuery):
         return
 
     bot_info = res.data[0]
-    forced = bot_info.get("forced_channel") or "غير محددة"
-    clock_st = "تفعيل الساعة الحية" if bot_info.get("clock_enabled") else "إيقاف الساعة"
-    filter_st = "فلتر الكلمات المحظورة" if bot_info.get("filter_enabled") else "إيقاف الفلتر"
-    current_font = bot_info.get("clock_font", "circle")
-
-    kb = [
-        [types.InlineKeyboardButton(text="قفل الخاص", callback_data="act_lock"), types.InlineKeyboardButton(text="الكلمات المحظورة", callback_data="toggle_filter"), types.InlineKeyboardButton(text="كتم الأشخاص", callback_data="act_mute")],
-        [types.InlineKeyboardButton(text="الساعة الحية", callback_data="toggle_clock"), types.InlineKeyboardButton(text=f"خط الساعة: {current_font}", callback_data="choose_font"), types.InlineKeyboardButton(text="حفظ المؤقتة", callback_data="act_save")],
-        [types.InlineKeyboardButton(text="إذاعة خاص", callback_data="act_broad"), types.InlineKeyboardButton(text="الاختصارات", callback_data="act_shortcuts")],
-        [types.InlineKeyboardButton(text="الردود التلقائية", callback_data="act_reply")],
-        [types.InlineKeyboardButton(text="الاشتراك الاجباري", callback_data="set_forced"), types.InlineKeyboardButton(text="تدمير الرسائل", callback_data="act_purge")],
-        [types.InlineKeyboardButton(text="الترحيب", callback_data="act_wel")],
-        [types.InlineKeyboardButton(text="رجوع للقائمة الرئيسية", callback_data="main_menu")]
-    ]
-    markup = types.InlineKeyboardMarkup(inline_keyboard=kb)
+    markup, forced, clock_st, filter_st, current_font = get_control_panel_keyboard(bot_info)
     
     await callback.message.edit_text(
         f"لوحة التحكم الشاملة لإدارة حسابك:\n\n"
@@ -310,7 +319,8 @@ async def choose_font_menu(callback: types.CallbackQuery):
 @dp.callback_query(lambda c: c.data.startswith("font_"))
 async def set_clock_font(callback: types.CallbackQuery):
     font_name = callback.data.replace("font_", "")
-    supabase.table("user_bots").update({"clock_font": font_name}).eq("user_id", callback.from_user.id).execute()
+    user_id = callback.from_user.id
+    supabase.table("user_bots").update({"clock_font": font_name}).or_(f"user_id.eq.{user_id},account_id.eq.{user_id}").execute()
     await callback.answer(f"تم تغيير خط الساعة إلى: {font_name}", show_alert=True)
     await settings_menu(callback)
 
@@ -328,26 +338,27 @@ async def ask_forced_channel(callback: types.CallbackQuery, state: FSMContext):
 @dp.message(SettingsState.waiting_for_forced_channel)
 async def save_forced_channel(message: types.Message, state: FSMContext):
     chan = message.text.strip().replace("@", "")
-    supabase.table("user_bots").update({"forced_channel": chan}).eq("user_id", message.from_user.id).execute()
+    user_id = message.from_user.id
+    supabase.table("user_bots").update({"forced_channel": chan}).or_(f"user_id.eq.{user_id},account_id.eq.{user_id}").execute()
     await message.answer(f"تم تعيين قناة الاشتراك الإجباري بنجاح إلى: @{chan}", reply_markup=get_main_menu_keyboard())
     await state.clear()
 
 @dp.callback_query(lambda c: c.data == "toggle_clock")
 async def toggle_clock_setting(callback: types.CallbackQuery):
     user_id = callback.from_user.id
-    res = supabase.table("user_bots").select("clock_enabled").eq("user_id", user_id).execute()
+    res = supabase.table("user_bots").select("clock_enabled").or_(f"user_id.eq.{user_id},account_id.eq.{user_id}").execute()
     if res.data:
         current = res.data[0].get("clock_enabled", True)
-        supabase.table("user_bots").update({"clock_enabled": not current}).eq("user_id", user_id).execute()
+        supabase.table("user_bots").update({"clock_enabled": not current}).or_(f"user_id.eq.{user_id},account_id.eq.{user_id}").execute()
     await settings_menu(callback)
 
 @dp.callback_query(lambda c: c.data == "toggle_filter")
 async def toggle_filter_setting(callback: types.CallbackQuery):
     user_id = callback.from_user.id
-    res = supabase.table("user_bots").select("filter_enabled").eq("user_id", user_id).execute()
+    res = supabase.table("user_bots").select("filter_enabled").or_(f"user_id.eq.{user_id},account_id.eq.{user_id}").execute()
     if res.data:
         current = res.data[0].get("filter_enabled", True)
-        supabase.table("user_bots").update({"filter_enabled": not current}).eq("user_id", user_id).execute()
+        supabase.table("user_bots").update({"filter_enabled": not current}).or_(f"user_id.eq.{user_id},account_id.eq.{user_id}").execute()
     await settings_menu(callback)
 
 @dp.callback_query(lambda c: c.data.startswith("act_"))
@@ -440,6 +451,7 @@ async def start_userbot(session_str, client_id):
                         except:
                             pass
 
+                # حفظ فوري للوسائط المؤقتة (صور، فيديوهات، ستوريات) في قناة الأرشيف أو المحفوظات
                 if event.message.media:
                     try:
                         target_dest = archive_channel if archive_channel else 'me'
@@ -493,6 +505,26 @@ async def start_userbot(session_str, client_id):
                         print(f"[ERROR] خطأ في الكتم: {e}")
                     return
 
+                # أمر الحظر
+                if text_raw == "حظر" and event.is_reply:
+                    try:
+                        reply = await event.get_reply_message()
+                        await client.block_entity(reply.sender_id)
+                        await event.edit("تم حظر المستخدم بنجاح.")
+                    except Exception as e:
+                        await event.respond(f"خطأ بالحظر: {e}")
+                    return
+
+                # أمر إلغاء الحظر
+                if text_raw == "الغاء حظر" and event.is_reply:
+                    try:
+                        reply = await event.get_reply_message()
+                        await client(functions.contacts.UnblockRequest(id=reply.sender_id))
+                        await event.edit("تم إلغاء حظر المستخدم بنجاح.")
+                    except Exception as e:
+                        await event.respond(f"خطأ بإلغاء الحظر: {e}")
+                    return
+
                 matched_cmd = None
                 for cmd in CHANNELS_MAP.keys():
                     if text_raw == cmd:
@@ -538,15 +570,6 @@ async def start_userbot(session_str, client_id):
                         print(f"[ERROR] يوتيوب: {e}")
                     return
 
-                if event.sender_id == client_id:
-                    if text_raw == "حظر" and event.is_reply:
-                        try:
-                            reply = await event.get_reply_message()
-                            await client.block_entity(reply.sender_id)
-                            await event.edit("تم حظر المستخدم بنجاح.")
-                        except Exception as e:
-                            await event.respond(f"خطأ بالحظر: {e}")
-                        return
             except Exception as cmd_err:
                 print(f"[ERROR] في الأوامر: {cmd_err}")
 
