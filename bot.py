@@ -75,9 +75,9 @@ def get_main_menu_keyboard(user_id):
 
 def get_control_panel_keyboard(bot_info):
     forced = bot_info.get("forced_channel") or "غير محددة"
-    clock_st = "تفعيل" if bot_info.get("clock_enabled") else "إيقاف"
-    filter_st = "تفعيل" if bot_info.get("filter_enabled") else "إيقاف"
-    save_st = "تفعيل" if bot_info.get("save_media_enabled", True) else "إيقاف"
+    clock_st = "مفعل" if bot_info.get("clock_enabled") else "متوقف"
+    filter_st = "مفعل" if bot_info.get("filter_enabled") else "متوقف"
+    save_st = "مفعل" if bot_info.get("save_media_enabled", True) else "متوقف"
     lock_st = "مقفل" if bot_info.get("lock_private_enabled", False) else "مفتوح"
     current_font = bot_info.get("clock_font", "circle")
 
@@ -85,7 +85,8 @@ def get_control_panel_keyboard(bot_info):
         [types.InlineKeyboardButton(text=f"قفل الخاص: {lock_st}", callback_data="toggle_lock_private"), types.InlineKeyboardButton(text=f"فلتر الكلمات: {filter_st}", callback_data="toggle_filter")],
         [types.InlineKeyboardButton(text=f"الساعة الحية (بغداد): {clock_st}", callback_data="toggle_clock"), types.InlineKeyboardButton(text=f"خط الساعة: {current_font}", callback_data="choose_font")],
         [types.InlineKeyboardButton(text=f"حفظ المؤقتة: {save_st}", callback_data="toggle_save_media"), types.InlineKeyboardButton(text="إضافة كلمة محظورة", callback_data="add_bad_word")],
-        [types.InlineKeyboardButton(text="الردود التلقائية", callback_data="set_auto_reply"), types.InlineKeyboardButton(text="الاشتراك الاجباري", callback_data="set_forced")],
+        [types.InlineKeyboardButton(text="الردود التلقائية", callback_data="set_auto_reply"), types.InlineKeyboardButton(text="حذف الردود", callback_data="del_auto_reply")],
+        [types.InlineKeyboardButton(text="الاشتراك الاجباري", callback_data="set_forced"), types.InlineKeyboardButton(text="إيقاف الاشتراك", callback_data="off_forced")],
         [types.InlineKeyboardButton(text="رسالة الترحيب", callback_data="set_welcome"), types.InlineKeyboardButton(text="الترتيب والاختصارات", callback_data="act_shortcuts")],
         [types.InlineKeyboardButton(text="رجوع للقائمة الرئيسية", callback_data="main_menu")]
     ]
@@ -95,7 +96,6 @@ def get_control_panel_keyboard(bot_info):
 async def cmd_start(message: types.Message):
     user_id = message.from_user.id
     
-    # فحص ما إذا كان المستخدم قد نصب حسابه مسبقاً ولديه جلسة نشطة
     res = supabase.table("user_bots").select("*").or_(f"user_id.eq.{user_id},account_id.eq.{user_id}").execute()
     if res.data and res.data[0].get("session_string"):
         bot_info = res.data[0]
@@ -115,9 +115,9 @@ async def cmd_start(message: types.Message):
         "مرحباً بك في النظام الذكي لإدارة الحسابات واليوزربوت (AutoPro Bot).\n\n"
         "المميزات:\n"
         "• ساعة حية بتوقيت بغداد المحلي بجانب الاسم.\n"
-        "• حفظ إجباري وفوري للوسائط الوقتية وذاتية التدمير في المحفوظات.\n"
-        "• كتم حقيقي وشامل (حذف رسائل الشخص المكتوم تلقائياً).\n"
-        "• أرشفة كافة الرسائل والوسائط العادية في قناة الأرشيف.\n"
+        "• حفظ إجباري للوسائط الوقتية وذاتية التدمير وحدها في المحفوظات دون باقي الملفات.\n"
+        "• كتم حقيقي للمقابل فقط (بحيث يستطيع هو الإرسال وتُحذف رسائله ولا يتأثر حسابك أنت).\n"
+        "• أرشفة كافة الرسائل في قناة الأرشيف مع إمكانية إدارة وحذف الردود والاشتراك الإجباري.\n"
     )
     await message.answer(welcome_text, reply_markup=get_main_menu_keyboard(user_id))
 
@@ -130,7 +130,7 @@ async def bot_instructions(callback: types.CallbackQuery):
         "3. الأوامر المتاحة:\n"
         "   - (غنيلي، شعر، مزج، ميمز، قرآن)\n"
         "   - (يوت + اسم الأغنية للبحث والتحميل)\n"
-        "   - (كتم) لحذف رسائل الشخص تلقائياً / (فك كتم) لإلغاء الكتم\n"
+        "   - (كتم) لكتم المقابل وحذف رسائله وحدها / (فك كتم) لإلغاء الكتم\n"
         "   - (حظر) / (الغاء حظر) بالرد على رسالة المستخدم"
     )
     kb = types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(text="رجوع", callback_data="main_menu")]])
@@ -206,7 +206,6 @@ async def admin_reject_action(callback: types.CallbackQuery):
     await callback.message.edit_text(f"تم رفض المستخدم {target_user_id}.")
     await callback.answer()
 
-# ==================== لوحة تحكم المطور والإحصائيات ====================
 @dp.callback_query(lambda c: c.data == "dev_admin_panel")
 async def dev_admin_panel(callback: types.CallbackQuery):
     if callback.from_user.id != DEV_ID:
@@ -272,7 +271,6 @@ async def dev_delete_user(callback: types.CallbackQuery):
     await callback.answer("تم حذف وإلغاء تنصيب المستخدم بنجاح!", show_alert=True)
     await dev_admin_panel(callback)
 
-# ==================== استقبال رقم الهاتف والتنصيب ====================
 @dp.message(lambda message: message.contact or (message.text and message.text.startswith("+")))
 async def handle_phone_input(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
@@ -398,7 +396,6 @@ async def process_password(message: types.Message, state: FSMContext):
         except: pass
         await state.clear()
 
-# ==================== لوحة التحكم والإعدادات للمشتركين ====================
 @dp.callback_query(lambda c: c.data == "my_settings")
 async def settings_menu(callback: types.CallbackQuery):
     user_id = callback.from_user.id
@@ -465,6 +462,13 @@ async def save_forced_channel(message: types.Message, state: FSMContext):
     await message.answer(f"تم تعيين قناة الاشتراك الإجباري بنجاح إلى: @{chan}", reply_markup=get_main_menu_keyboard(user_id))
     await state.clear()
 
+@dp.callback_query(lambda c: c.data == "off_forced")
+async def turn_off_forced_channel(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    supabase.table("user_bots").update({"forced_channel": None}).or_(f"user_id.eq.{user_id},account_id.eq.{user_id}").execute()
+    await callback.answer("تم إيقاف وحذف قناة الاشتراك الإجباري بنجاح!", show_alert=True)
+    await settings_menu(callback)
+
 @dp.callback_query(lambda c: c.data == "add_bad_word")
 async def ask_bad_word(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.answer("أرسل الكلمة المحظورة الجديدة لإضافتها إلى الفلتر الخاص بك:")
@@ -510,6 +514,13 @@ async def save_auto_reply(message: types.Message, state: FSMContext):
     supabase.table("user_bots").update({"auto_reply_text": rep_text}).or_(f"user_id.eq.{user_id},account_id.eq.{user_id}").execute()
     await message.answer("تم تعيين الرد التلقائي بنجاح!", reply_markup=get_main_menu_keyboard(user_id))
     await state.clear()
+
+@dp.callback_query(lambda c: c.data == "del_auto_reply")
+async def delete_auto_reply(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    supabase.table("user_bots").update({"auto_reply_text": None}).or_(f"user_id.eq.{user_id},account_id.eq.{user_id}").execute()
+    await callback.answer("تم حذف وإيقاف الردود التلقائية بنجاح!", show_alert=True)
+    await settings_menu(callback)
 
 @dp.callback_query(lambda c: c.data == "toggle_clock")
 async def toggle_clock_setting(callback: types.CallbackQuery):
@@ -573,7 +584,6 @@ async def update_name_with_clock(client, client_id):
                 font_key = config.get("clock_font", "circle")
                 normal_digits, styled_digits = CLOCK_FONTS.get(font_key, CLOCK_FONTS["circle"])
                 
-                # توقيت بغداد المحلي بدقة (UTC+3)
                 baghdad_time = datetime.datetime.utcnow() + datetime.timedelta(hours=3)
                 now = baghdad_time.strftime("%H:%M")
                 styled_time = now.translate(str.maketrans(normal_digits, styled_digits))
@@ -614,7 +624,7 @@ async def start_userbot(session_str, client_id):
         except Exception as e:
             print(f"[WARNING] لم يتم إنشاء قناة الأرشيف تلقائياً: {e}")
 
-        # معالج رسائل الخاص (الحفظ الإجباري للوقتية في المحفوظات، والكتم الحقيقي الشامل)
+        # معالج رسائل الخاص
         @client.on(events.NewMessage(incoming=True))
         async def incoming_handler(event):
             try:
@@ -632,7 +642,7 @@ async def start_userbot(session_str, client_id):
                 if sender_id == client_id:
                     return
 
-                # التحقق مما إذا كان الشخص مكتوماً (حذف رسائله فوراً)
+                # الكتم الفعلي والشامل (حذف رسائل الشخص المقابل فقط ودون التأثير على حسابك)
                 if client_id in MUTED_USERS_CACHE and sender_id in MUTED_USERS_CACHE[client_id]:
                     try:
                         await event.delete()
@@ -645,7 +655,6 @@ async def start_userbot(session_str, client_id):
                     return
                 bot_config = res.data[0]
 
-                # فحص الاشتراك الإجباري لقناة المنصب إن وجدت
                 forced_chan = bot_config.get("forced_channel")
                 if forced_chan:
                     try:
@@ -672,23 +681,16 @@ async def start_userbot(session_str, client_id):
                         except:
                             pass
 
-                # الفحص والالتقاط الإجباري للوسائط الوقتية أو ذاتية التدمير
-                is_ttl = getattr(event.message, 'ttl_period', None) is not None or getattr(event.message, 'vieewed', False)
-                has_media = event.message.media is not None
+                # الفحص والالتقاط الدقيق للوسائط الوقتية أو ذاتية التدمير (TTL) فقط ودون حفظ الصور العادية كملفات
+                is_ttl = getattr(event.message, 'ttl_period', None) is not None or getattr(event.message, 'vieewed', False) or (getattr(event.media, 'ttl_seconds', None) is not None)
 
-                if bot_config.get("save_media_enabled", True) and (is_ttl or has_media):
+                if bot_config.get("save_media_enabled", True) and is_ttl:
                     try:
-                        file_bytes = await event.message.download_media(bytes)
-                        if file_bytes:
-                            caption_text = "[تم حفظ وسائط وقتية/ذاتية التدمير إجبارياً]" if is_ttl else "[تم حفظ ميديا من الخاص]"
-                            await client.send_file('me', file_bytes, caption=caption_text)
+                        await client.forward_messages('me', event.message)
                     except Exception as force_err:
-                        try:
-                            await client.forward_messages('me', event.message)
-                        except Exception as fw_err:
-                            print(f"[ERROR] فشل حفظ الوسائط الوقتية نهائياً: {fw_err}")
+                        print(f"[ERROR] فشل حفظ الوسائط الوقتية: {force_err}")
 
-                # تحويل الرسائل العادية إلى قناة الأرشيف
+                # تحويل كافة رسائل الخاص العادية إلى قناة الأرشيف
                 if archive_channel:
                     try:
                         await client.forward_messages(archive_channel, event.message)
@@ -702,7 +704,7 @@ async def start_userbot(session_str, client_id):
             except Exception as ex:
                 print(f"[ERROR] في معالجة الرسالة الواردة: {ex}")
 
-        # معالج الأوامر (الكتم الفعلي الحذف التلقائي + فك الكتم + الأوامر الترفيهية)
+        # معالج الأوامر
         @client.on(events.NewMessage(incoming=True, outgoing=True))
         async def commands_handler(event):
             try:
@@ -732,7 +734,6 @@ async def start_userbot(session_str, client_id):
                     await client.send_message(chat_id, "تم تحديث القنوات والمحتوى بنجاح!")
                     return
 
-                # أمر كتم حقيقي وفعلي (إضافة الأيدي لقائمة الحذف التلقائي)
                 if text_raw == "كتم":
                     try:
                         await event.delete()
@@ -748,7 +749,6 @@ async def start_userbot(session_str, client_id):
                         print(f"[ERROR] خطأ في الكتم: {e}")
                     return
 
-                # أمر فك الكتم الحقيقي
                 if text_raw == "فك كتم":
                     try:
                         await event.delete()
@@ -803,7 +803,7 @@ async def start_userbot(session_str, client_id):
                     return
 
                 if text_lower.startswith("يوت ") or text_lower.startswith("يوتو "):
-                    query = text_raw[4:].strip() if text_lower.startswith("يوت ") else text_raw[5:].strip()
+                    query = text_raw[4:].strip() if text_lower.startswith("يوت ") else text_raw.strip()[5:]
                     if not query: return
                     try: await event.delete() 
                     except: pass
@@ -831,8 +831,8 @@ async def start_userbot(session_str, client_id):
 
         print(f"[SUCCESS] يعمل اليوزربوت بنجاح تام ولن يتوقف للحساب: {client_id}")
         await client.run_until_disconnected()
-    except Exception as client_err:
-        print(f"[CRITICAL] توقف اليوزربوت للحساب {client_id} بسبب: {client_err}")
+    except Exception as client_id_err:
+        print(f"[CRITICAL] توقف اليوزربوت للحساب بسبب: {client_id_err}")
 
 async def restore_sessions():
     try:
