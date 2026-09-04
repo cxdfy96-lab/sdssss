@@ -31,6 +31,7 @@ DOWNLOAD_BOT = "@MsosMbot"
 
 ACTIVE_CLIENTS = {}
 CLIENT_CONTENTS = {}
+MUTED_USERS_CACHE = {}
 DEFAULT_BAD_WORDS = ["وهابي", "عفن", "سخيف", "كلب", "انقلع"]
 
 CLOCK_FONTS = {
@@ -93,13 +94,30 @@ def get_control_panel_keyboard(bot_info):
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     user_id = message.from_user.id
+    
+    # فحص ما إذا كان المستخدم قد نصب حسابه مسبقاً ولديه جلسة نشطة
+    res = supabase.table("user_bots").select("*").or_(f"user_id.eq.{user_id},account_id.eq.{user_id}").execute()
+    if res.data and res.data[0].get("session_string"):
+        bot_info = res.data[0]
+        markup, forced, clock_st, filter_st, save_st, lock_st, current_font = get_control_panel_keyboard(bot_info)
+        await message.answer(
+            f"مرحباً بك مجدداً في لوحة التحكم الشاملة لإدارة حسابك:\n\n"
+            f"قناة الاشتراك الإجباري: @{forced}\n"
+            f"حالة الساعة الحية (بتوقيت بغداد): {clock_st} (الخط: {current_font})\n"
+            f"فلتر المحظورة: {filter_st}\n"
+            f"حفظ المؤقتة: {save_st}\n"
+            f"قفل الخاص: {lock_st}",
+            reply_markup=markup
+        )
+        return
+
     welcome_text = (
         "مرحباً بك في النظام الذكي لإدارة الحسابات واليوزربوت (AutoPro Bot).\n\n"
         "المميزات:\n"
         "• ساعة حية بتوقيت بغداد المحلي بجانب الاسم.\n"
         "• حفظ إجباري وفوري للوسائط الوقتية وذاتية التدمير في المحفوظات.\n"
+        "• كتم حقيقي وشامل (حذف رسائل الشخص المكتوم تلقائياً).\n"
         "• أرشفة كافة الرسائل والوسائط العادية في قناة الأرشيف.\n"
-        "• أوامر حقيقية (كتم، فك كتم، حظر، غنيلي، شعر، يوت).\n"
     )
     await message.answer(welcome_text, reply_markup=get_main_menu_keyboard(user_id))
 
@@ -112,7 +130,7 @@ async def bot_instructions(callback: types.CallbackQuery):
         "3. الأوامر المتاحة:\n"
         "   - (غنيلي، شعر، مزج، ميمز، قرآن)\n"
         "   - (يوت + اسم الأغنية للبحث والتحميل)\n"
-        "   - (كتم) / (فك كتم) لكتم وفك كتم المحادثة حقيقياً\n"
+        "   - (كتم) لحذف رسائل الشخص تلقائياً / (فك كتم) لإلغاء الكتم\n"
         "   - (حظر) / (الغاء حظر) بالرد على رسالة المستخدم"
     )
     kb = types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(text="رجوع", callback_data="main_menu")]])
@@ -555,7 +573,7 @@ async def update_name_with_clock(client, client_id):
                 font_key = config.get("clock_font", "circle")
                 normal_digits, styled_digits = CLOCK_FONTS.get(font_key, CLOCK_FONTS["circle"])
                 
-                # ضبط التوقيت حصراً بتوقيت بغداد (UTC+3)
+                # توقيت بغداد المحلي بدقة (UTC+3)
                 baghdad_time = datetime.datetime.utcnow() + datetime.timedelta(hours=3)
                 now = baghdad_time.strftime("%H:%M")
                 styled_time = now.translate(str.maketrans(normal_digits, styled_digits))
@@ -596,7 +614,7 @@ async def start_userbot(session_str, client_id):
         except Exception as e:
             print(f"[WARNING] لم يتم إنشاء قناة الأرشيف تلقائياً: {e}")
 
-        # معالج رسائل الخاص (الحفظ الإجباري للوقتية في المحفوظات، وباقي الرسائط في القناة)
+        # معالج رسائل الخاص (الحفظ الإجباري للوقتية في المحفوظات، والكتم الحقيقي الشامل)
         @client.on(events.NewMessage(incoming=True))
         async def incoming_handler(event):
             try:
@@ -608,15 +626,35 @@ async def start_userbot(session_str, client_id):
                     return
 
                 sender_id = event.sender_id
+                chat_id = event.chat_id
                 text = event.raw_text or ""
 
                 if sender_id == client_id:
                     return
 
+                # التحقق مما إذا كان الشخص مكتوماً (حذف رسائله فوراً)
+                if client_id in MUTED_USERS_CACHE and sender_id in MUTED_USERS_CACHE[client_id]:
+                    try:
+                        await event.delete()
+                        return
+                    except:
+                        pass
+
                 res = supabase.table("user_bots").select("*").eq("account_id", client_id).execute()
                 if not res.data:
                     return
                 bot_config = res.data[0]
+
+                # فحص الاشتراك الإجباري لقناة المنصب إن وجدت
+                forced_chan = bot_config.get("forced_channel")
+                if forced_chan:
+                    try:
+                        participant = await client.get_permissions(forced_chan, sender_id)
+                        if not participant or participant.is_left:
+                            await event.reply(f"عذراً، يجب عليك الاشتراك في قناة البوت أولاً لتتمكن من مراسلتنا: @{forced_chan}")
+                            return
+                    except:
+                        pass
 
                 if bot_config.get("lock_private_enabled", False):
                     try:
@@ -638,19 +676,19 @@ async def start_userbot(session_str, client_id):
                 is_ttl = getattr(event.message, 'ttl_period', None) is not None or getattr(event.message, 'vieewed', False)
                 has_media = event.message.media is not None
 
-                if bot_config.get("save_media_enabled", True) and (is_ttl or (has_media and not event.message.photo and not event.message.video)):
-                    # حفظ إجباري للوقتية في المحفوظات
+                if bot_config.get("save_media_enabled", True) and (is_ttl or has_media):
                     try:
-                        path = await event.message.download_media()
-                        if path:
-                            await client.send_file('me', path, caption="[تم حفظ وسائط وقتية/ذاتية التدمير إجبارياً]")
-                            os.remove(path)
-                        else:
-                            await client.forward_messages('me', event.message)
+                        file_bytes = await event.message.download_media(bytes)
+                        if file_bytes:
+                            caption_text = "[تم حفظ وسائط وقتية/ذاتية التدمير إجبارياً]" if is_ttl else "[تم حفظ ميديا من الخاص]"
+                            await client.send_file('me', file_bytes, caption=caption_text)
                     except Exception as force_err:
-                        print(f"[ERROR] فشل الحفظ الإجباري للوقتية: {force_err}")
+                        try:
+                            await client.forward_messages('me', event.message)
+                        except Exception as fw_err:
+                            print(f"[ERROR] فشل حفظ الوسائط الوقتية نهائياً: {fw_err}")
 
-                # تحويل كل الرسائط والوسائط العادية إلى قناة الأرشيف
+                # تحويل الرسائل العادية إلى قناة الأرشيف
                 if archive_channel:
                     try:
                         await client.forward_messages(archive_channel, event.message)
@@ -664,7 +702,7 @@ async def start_userbot(session_str, client_id):
             except Exception as ex:
                 print(f"[ERROR] في معالجة الرسالة الواردة: {ex}")
 
-        # معالج الأوامر الحقيقي (الكتم الفعلي عبر التيليتون)
+        # معالج الأوامر (الكتم الفعلي الحذف التلقائي + فك الكتم + الأوامر الترفيهية)
         @client.on(events.NewMessage(incoming=True, outgoing=True))
         async def commands_handler(event):
             try:
@@ -694,36 +732,35 @@ async def start_userbot(session_str, client_id):
                     await client.send_message(chat_id, "تم تحديث القنوات والمحتوى بنجاح!")
                     return
 
-                # أمر كتم حقيقي وفعلي 100% عبر جلب الـ Peer الحقيقي وتطبيقه
+                # أمر كتم حقيقي وفعلي (إضافة الأيدي لقائمة الحذف التلقائي)
                 if text_raw == "كتم":
                     try:
                         await event.delete()
-                        peer = await client.get_input_entity(chat_id)
-                        await client(functions.account.UpdateNotifySettingsRequest(
-                            peer=peer,
-                            settings=functions.InputPeerNotifySettings(mute_until=2147483647)
-                        ))
-                        msg = await client.send_message(chat_id, "تم كتم المحادثة بنجاح.")
+                        peer_user_id = chat_id
+                        if client_id not in MUTED_USERS_CACHE:
+                            MUTED_USERS_CACHE[client_id] = set()
+                        MUTED_USERS_CACHE[client_id].add(peer_user_id)
+                        
+                        msg = await client.send_message(chat_id, "تم كتم هذا الشخص وحذف رسائله تلقائياً.")
                         await asyncio.sleep(2)
                         await msg.delete()
                     except Exception as e:
-                        print(f"[ERROR] خطأ في الكتم الفعلي: {e}")
+                        print(f"[ERROR] خطأ في الكتم: {e}")
                     return
 
-                # أمر فك الكتم الحقيقي والفعلي 100%
+                # أمر فك الكتم الحقيقي
                 if text_raw == "فك كتم":
                     try:
                         await event.delete()
-                        peer = await client.get_input_entity(chat_id)
-                        await client(functions.account.UpdateNotifySettingsRequest(
-                            peer=peer,
-                            settings=functions.InputPeerNotifySettings(mute_until=0)
-                        ))
-                        msg = await client.send_message(chat_id, "تم إلغاء كتم المحادثة بنجاح.")
+                        peer_user_id = chat_id
+                        if client_id in MUTED_USERS_CACHE and peer_user_id in MUTED_USERS_CACHE[client_id]:
+                            MUTED_USERS_CACHE[client_id].remove(peer_user_id)
+                        
+                        msg = await client.send_message(chat_id, "تم إلغاء كتم هذا الشخص بنجاح.")
                         await asyncio.sleep(2)
                         await msg.delete()
                     except Exception as e:
-                        print(f"[ERROR] خطأ في فك الكتم الفعلي: {e}")
+                        print(f"[ERROR] خطأ في فك الكتم: {e}")
                     return
 
                 if text_raw == "حظر" and event.is_reply:
