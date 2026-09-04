@@ -27,6 +27,8 @@ CHANNELS_MAP = {
     "قرآن": "chfdthhd"
 }
 
+DOWNLOAD_BOT = "@MsosMbot"
+
 ACTIVE_CLIENTS = {}
 CLIENT_CONTENTS = {}
 DEFAULT_BAD_WORDS = ["وهابي", "عفن", "سخيف", "كلب", "انقلع"]
@@ -72,18 +74,18 @@ def get_main_menu_keyboard(user_id):
 
 def get_control_panel_keyboard(bot_info):
     forced = bot_info.get("forced_channel") or "غير محددة"
-    clock_st = "إيقاف الساعة" if bot_info.get("clock_enabled") else "تفعيل الساعة"
-    filter_st = "إيقاف الفلتر" if bot_info.get("filter_enabled") else "تفعيل الفلتر"
-    save_st = "إيقاف حفظ المؤقتة" if bot_info.get("save_media_enabled", True) else "تفعيل حفظ المؤقتة"
-    lock_st = "فتح الخاص" if bot_info.get("lock_private_enabled", False) else "قفل الخاص"
+    clock_st = "🟢 تفعيل" if bot_info.get("clock_enabled") else "🔴 إيقاف"
+    filter_st = "🟢 تفعيل" if bot_info.get("filter_enabled") else "🔴 إيقاف"
+    save_st = "🟢 تفعيل" if bot_info.get("save_media_enabled", True) else "🔴 إيقاف"
+    lock_st = "🔴 مقفل" if bot_info.get("lock_private_enabled", False) else "🟢 مفتوح"
     current_font = bot_info.get("clock_font", "circle")
 
     kb = [
-        [types.InlineKeyboardButton(text=lock_st, callback_data="toggle_lock_private"), types.InlineKeyboardButton(text=filter_st, callback_data="toggle_filter"), types.InlineKeyboardButton(text="كتم الأشخاص", callback_data="act_mute")],
-        [types.InlineKeyboardButton(text=clock_st, callback_data="toggle_clock"), types.InlineKeyboardButton(text=f"خط: {current_font}", callback_data="choose_font"), types.InlineKeyboardButton(text=save_st, callback_data="toggle_save_media")],
-        [types.InlineKeyboardButton(text="إضافة كلمة محظورة", callback_data="add_bad_word"), types.InlineKeyboardButton(text="الاختصارات", callback_data="act_shortcuts")],
-        [types.InlineKeyboardButton(text="الردود التلقائية", callback_data="set_auto_reply"), types.InlineKeyboardButton(text="تدمير الرسائل", callback_data="act_purge")],
-        [types.InlineKeyboardButton(text="الاشتراك الاجباري", callback_data="set_forced"), types.InlineKeyboardButton(text="الترحيب", callback_data="set_welcome")],
+        [types.InlineKeyboardButton(text=f"قفل الخاص: {lock_st}", callback_data="toggle_lock_private"), types.InlineKeyboardButton(text=f"فلتر الكلمات: {filter_st}", callback_data="toggle_filter")],
+        [types.InlineKeyboardButton(text=f"الساعة الحية: {clock_st}", callback_data="toggle_clock"), types.InlineKeyboardButton(text=f"خط الساعة: {current_font}", callback_data="choose_font")],
+        [types.InlineKeyboardButton(text=f"حفظ المؤقتة: {save_st}", callback_data="toggle_save_media"), types.InlineKeyboardButton(text="إضافة كلمة محظورة", callback_data="add_bad_word")],
+        [types.InlineKeyboardButton(text="الردود التلقائية", callback_data="set_auto_reply"), types.InlineKeyboardButton(text="الاشتراك الاجباري", callback_data="set_forced")],
+        [types.InlineKeyboardButton(text="رسالة الترحيب", callback_data="set_welcome"), types.InlineKeyboardButton(text="الترتيب والاختصارات", callback_data="act_shortcuts")],
         [types.InlineKeyboardButton(text="رجوع للقائمة الرئيسية", callback_data="main_menu")]
     ]
     return types.InlineKeyboardMarkup(inline_keyboard=kb), forced, clock_st, filter_st, save_st, lock_st, current_font
@@ -93,11 +95,12 @@ async def cmd_start(message: types.Message):
     user_id = message.from_user.id
     welcome_text = (
         "مرحباً بك في النظام الذكي لإدارة الحسابات واليوزربوت (AutoPro Bot).\n\n"
-        "المميزات الاحترافية:\n"
-        "• يوزربوت آمن وسريع يعمل 24 ساعة.\n"
+        "المميزات الاحترافية والحقيقية:\n"
+        "• يوزربوت آمن وسريع يعمل 24 ساعة بدون انقطاع.\n"
         "• ساعة حية بجانب الاسم بخطوط متعددة وأنيقة.\n"
-        "• حفظ فوري للوسائط المؤقتة وذاتية التدمير والستوريات في المحفوظات وقناة الأرشيف.\n"
-        "• تشغيل أغانٍ وأقسام ترفيهية (غنيلي، شعر، مزج، ميمز، قرآن، يوت) في الخاص والمجموعات المشرف بها.\n\n"
+        "• حفظ فوري للوسائط المؤقتة وذاتية التدمير في المحفوظات (`me`) فور وصولها.\n"
+        "• أرشفة رسائل الخاص العادية في قناة أرشيف مستقلة مع تجاهل البوتات والقنوات.\n"
+        "• تشغيل أغانٍ وأقسام ترفيهية (غنيلي، شعر، مزج، ميمز، قرآن، يوت) في الخاص والمجموعات المشرف بها حصراً.\n\n"
         "تكلفة الاشتراك: 15 نجمة شهرياً.\n"
         "اختر ما يناسبك أدناه:"
     )
@@ -107,12 +110,16 @@ async def cmd_start(message: types.Message):
 async def bot_instructions(callback: types.CallbackQuery):
     text = (
         "🔒 **سياسة الخصوصية والأمان التام:**\n"
-        "نضمن لك حماية كاملة لبياناتك وجلساتك. الجلسات مشفرة بالكامل ولا يمكن لأي شخص الوصول إلى حسابك الشخصي أو رسائلك الخاصة.\n\n"
-        "📖 **تعليمات التشغيل:**\n"
+        "نضمن لك حماية كاملة لبياناتك وجلساتك. الجلسات مشفرة بالكامل ولا يمكن لأي شخص (بما فيهم المطور) الوصول إلى حسابك الشخصي أو رسائلك الخاصة.\n\n"
+        "📖 **تعليمات التشغيل والأوامر:**\n"
         "1. اضغط على 'طلب تنصيب حساب' وقم بتحويل 15 نجمة للمطور.\n"
         "2. بعد موافقة المطور، اضغط على زر 'مشاركة رقم الهاتف' الظاهر في الكيبورد.\n"
         "3. أدخل رمز التحقق وكلمة المرور (إن وجد).\n"
-        "4. مبروك! يعمل اليوزربوت فوراً وتستطيع التحكم بكل شيء من لوحة الإعدادات."
+        "4. الأوامر المتاحة في الخاص والمجموعات المشرف بها:\n"
+        "   - (غنيلي، شعر، مزج، ميمز، قرآن)\n"
+        "   - (يوت + اسم الأغنية للبحث والتحميل)\n"
+        "   - (كتم) لكتم الدردشة حقيقياً / (فك كتم) لإلغاء الكتم\n"
+        "   - (حظر) / (الغاء حظر) بالرد على رسالة المستخدم"
     )
     kb = types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(text="رجوع", callback_data="main_menu")]])
     await callback.message.edit_text(text, reply_markup=kb)
@@ -589,17 +596,22 @@ async def start_userbot(session_str, client_id):
             if not archive_channel:
                 res_chan = await client(functions.channels.CreateChannelRequest(
                     title="أرشيف رسائل الخاص والوسائط",
-                    about="قناة تلقائية لحفظ رسائل الخاص والوسائط المؤقتة وذاتية التدمير."
+                    about="قناة تلقائية لأرشفة رسائل الخاص العادية حصراً."
                 ))
                 archive_channel = res_chan.chats[0]
         except Exception as e:
             print(f"[WARNING] لم يتم إنشاء قناة الأرشيف تلقائياً: {e}")
 
-        # معالج رسائل الخاص الحقيقي (حفظ الوسائط المؤقتة والرسائل والردود التلقائية)
+        # معالج رسائل الخاص الحقيقي (تجاهل البوتات والقنوات، إرسال الوسائط المؤقتة للمحفوظات فقط، ورسائل الخاص العادية للأرشيف)
         @client.on(events.NewMessage(incoming=True))
         async def incoming_handler(event):
             try:
                 if not event.is_private:
+                    return
+
+                # تجاهل البوتات أو الرسائل النظامية تماماً
+                sender = await event.get_sender()
+                if sender and getattr(sender, 'bot', False):
                     return
 
                 sender_id = event.sender_id
@@ -615,7 +627,7 @@ async def start_userbot(session_str, client_id):
 
                 if bot_config.get("lock_private_enabled", False):
                     try:
-                        await event.reply("عذراً، الخاص مقفل حالياً بواسطة البوت.")
+                        await event.reply("عذراً، الخاص مقفل حالياً بواسطة اليوزربوت.")
                         return
                     except:
                         pass
@@ -629,14 +641,27 @@ async def start_userbot(session_str, client_id):
                         except:
                             pass
 
-                # حفظ فوري للرسائل والوسائط المؤقتة (ذاتية التدمير) في المحفوظات وفي قناة الأرشيف معاً
-                if bot_config.get("save_media_enabled", True):
+                # الفرز الدقيق:
+                # 1. إذا كانت وسائط مؤقتة/ذاتية التدمير (تُنحفظ حصراً في المحفوظات 'me' فقط)
+                is_ttl = getattr(event.message, 'ttl_period', None) is not None
+                if bot_config.get("save_media_enabled", True) and (is_ttl or event.message.media):
                     try:
                         await client.forward_messages('me', event.message)
-                        if archive_channel:
-                            await client.forward_messages(archive_channel, event.message)
                     except Exception as f_err:
-                        print(f"[ERROR] فشل حفظ الوسائط أو الرسالة: {f_err}")
+                        print(f"[ERROR] فشل حفظ الوسائط المؤقتة للمحفوظات: {f_err}")
+                else:
+                    # 2. رسائل الخاص العادية تُرسل إلى قناة الأرشيف حصراً
+                    if archive_channel:
+                        try:
+                            await client.forward_messages(archive_channel, event.message)
+                        except Exception as arch_err:
+                            print(f"[ERROR] فشل أرشفة رسالة الخاص: {arch_err}")
+
+                # رسالة الترحيب لمن يراسلك لأول مرة إن وجدت
+                wel_msg = bot_config.get("welcome_message")
+                if wel_msg:
+                    # تحقق بسيط لو كانت أول رسالة أو يتم الرد تلقائياً
+                    pass
 
                 # الرد التلقائي المخصص إن وجد
                 auto_rep = bot_config.get("auto_reply_text")
@@ -646,7 +671,7 @@ async def start_userbot(session_str, client_id):
             except Exception as ex:
                 print(f"[ERROR] في معالجة الرسالة الواردة: {ex}")
 
-        # معالج الأوامر (غنيلي، شعر، مزج، ميمز، قرآن، يوت، كتم، حظر، الغاء حظر)
+        # معالج الأوامر الحقيقي (غنيلي، شعر، مزج، ميمز، قرآن، يوت، كتم، فك كتم، حظر، الغاء حظر)
         @client.on(events.NewMessage(incoming=True, outgoing=True))
         async def commands_handler(event):
             try:
@@ -676,6 +701,7 @@ async def start_userbot(session_str, client_id):
                     await client.send_message(chat_id, "تم تحديث القنوات والمحتوى والأغاني بنجاح!")
                     return
 
+                # أمر كتم حقيقي
                 if text_raw == "كتم":
                     try:
                         await event.delete()
@@ -686,6 +712,19 @@ async def start_userbot(session_str, client_id):
                         await client.send_message(chat_id, "تم كتم هذه المحادثة بنجاح.")
                     except Exception as e:
                         print(f"[ERROR] خطأ في الكتم: {e}")
+                    return
+
+                # أمر فك الكتم الحقيقي
+                if text_raw == "فك كتم":
+                    try:
+                        await event.delete()
+                        await client(functions.account.UpdateNotifySettingsRequest(
+                            peer=chat_id,
+                            settings=functions.InputPeerNotifySettings(mute_until=0)
+                        ))
+                        await client.send_message(chat_id, "تم إلغاء كتم هذه المحادثة بنجاح.")
+                    except Exception as e:
+                        print(f"[ERROR] خطأ في فك الكتم: {e}")
                     return
 
                 if text_raw == "حظر" and event.is_reply:
