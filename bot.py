@@ -59,12 +59,15 @@ class LoginState(StatesGroup):
 class SettingsState(StatesGroup):
     waiting_for_forced_channel = State()
 
-def get_main_menu_keyboard():
+def get_main_menu_keyboard(user_id):
     kb = [
         [types.InlineKeyboardButton(text="طلب تنصيب حساب (15 نجمة/شهر)", callback_data="request_install")],
         [types.InlineKeyboardButton(text="لوحة التحكم والإعدادات", callback_data="my_settings")],
+        [types.InlineKeyboardButton(text="تعليمات استخدام البوت", callback_data="bot_instructions")],
         [types.InlineKeyboardButton(text="مراسلة المطور للدفع", url=f"https://t.me/{DEV_USER.replace('@','')}")]
     ]
+    if user_id == DEV_ID:
+        kb.append([types.InlineKeyboardButton(text="لوحة تحكم المطور والإحصائيات", callback_data="dev_admin_panel")])
     return types.InlineKeyboardMarkup(inline_keyboard=kb)
 
 def get_control_panel_keyboard(bot_info):
@@ -88,12 +91,36 @@ def get_control_panel_keyboard(bot_info):
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
-    await message.answer(
-        "أهلاً بك في بوت إدارة الحسابات واليوزربوت المتطور (AutoPro Bot).\n\n"
-        "شروط التنصيب: تفعيل الحساب يتطلب دفع 15 نجمة شهرياً.\n"
-        "يرجى مراسلة المطور عبر الزر أدناه لدفع النجوم والحصول على صلاحية التنصيب:",
-        reply_markup=get_main_menu_keyboard()
+    user_id = message.from_user.id
+    welcome_text = (
+        "مرحباً بك في النظام المتطور لإدارة الحسابات واليوزربوت (AutoPro Bot).\n\n"
+        "هذا البوت يتيح لك:\n"
+        "• تفعيل يوزربوت ذكي يدير حسابك تلقائياً.\n"
+        "• تشغيل الساعة الحية بجانب اسمك بخطوط متنوعة.\n"
+        "• حفظ فوري للوسائط المؤقتة وذاتية التدمير.\n"
+        "• تشغيل أوامر الترفيه (غنيلي، شعر، مزج، ميمز، قرآن، يوت) في الخاص والمجموعات التي تكون فيها مشرفاً.\n\n"
+        "شروط الاشتراك: تفعيل الحساب يتطلب دفع 15 نجمة شهرياً.\n"
+        "اختر ما يناسبك من الأزرار أدناه:"
     )
+    await message.answer(welcome_text, reply_markup=get_main_menu_keyboard(user_id))
+
+@dp.callback_query(lambda c: c.data == "bot_instructions")
+async def bot_instructions(callback: types.CallbackQuery):
+    text = (
+        "تعليمات الاستخدام والشرح الكامل:\n\n"
+        "1. اضغط على زر 'طلب تنصيب حساب' وتواصل مع المطور لتحويل 15 نجمة.\n"
+        "2. بعد موافقة المطور، شارك رقم هاتفك عبر زر مشاركة جهة الاتصال.\n"
+        "3. أدخل رمز التحقق وكلمة المرور (إن وجد تحقق بخطوتين).\n"
+        "4. يمكنك استخدام الأوامر التالية في الخاص أو المجموعات المشرف بها:\n"
+        "   - (غنيلي، شعر، مزج، ميمز، قرآن)\n"
+        "   - (يوت + اسم الأغنية/الفيديو للتحميل)\n"
+        "   - (كتم) لكتم المحادثة\n"
+        "   - (حظر / الغاء حظر) بالرد على رسالة المستخدم\n"
+        "   - (تحديث) لتحديث محتوى القنوات"
+    )
+    kb = types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(text="رجوع", callback_data="main_menu")]])
+    await callback.message.edit_text(text, reply_markup=kb)
+    await callback.answer()
 
 @dp.callback_query(lambda c: c.data == "request_install")
 async def request_install(callback: types.CallbackQuery):
@@ -103,8 +130,8 @@ async def request_install(callback: types.CallbackQuery):
     
     kb = [
         [
-            types.InlineKeyboardButton(text="موافقة وتفعيل", callback_data=f"approve_{user_id}"),
-            types.InlineKeyboardButton(text="رفض", callback_data=f"reject_{user_id}")
+            types.InlineKeyboardButton(text="موافقة وتفعيل", callback_data=f"app_{user_id}"),
+            types.InlineKeyboardButton(text="رفض", callback_data=f"rej_{user_id}")
         ]
     ]
     markup = types.InlineKeyboardMarkup(inline_keyboard=kb)
@@ -120,7 +147,8 @@ async def request_install(callback: types.CallbackQuery):
         await callback.message.answer("حدث خطأ أثناء إرسال الطلب للمطور.")
     await callback.answer()
 
-@dp.callback_query(lambda c: c.data.startswith("approve_") or c.data.startswith("reject_"))
+# أزرار الإدارة للمطور (موافقة ورفض)
+@dp.callback_query(lambda c: c.data.startswith("app_") or c.data.startswith("rej_"))
 async def admin_approve_reject(callback: types.CallbackQuery):
     if callback.from_user.id != DEV_ID:
         await callback.answer("هذا الأمر مخصص للمطور فقط!", show_alert=True)
@@ -130,7 +158,7 @@ async def admin_approve_reject(callback: types.CallbackQuery):
     action = parts[0]
     target_user_id = int(parts[1])
     
-    if action == "approve":
+    if action == "app":
         supabase.table("user_bots").upsert({
             "user_id": target_user_id,
             "is_approved": True,
@@ -161,6 +189,73 @@ async def admin_approve_reject(callback: types.CallbackQuery):
         await callback.message.edit_text(f"تم رفض المستخدم {target_user_id}.")
     await callback.answer()
 
+# ==================== لوحة تحكم المطور (الإحصائيات وإلغاء التنصيب) ====================
+@dp.callback_query(lambda c: c.data == "dev_admin_panel")
+async def dev_admin_panel(callback: types.CallbackQuery):
+    if callback.from_user.id != DEV_ID:
+        await callback.answer("هذا مخصص للمطور فقط!", show_alert=True)
+        return
+        
+    res = supabase.table("user_bots").select("*").execute()
+    total_users = len(res.data) if res.data else 0
+    active_bots = sum(1 for x in (res.data or []) if x.get("is_active"))
+    
+    kb = [
+        [types.InlineKeyboardButton(text="قائمة المستخدمين والتحكم", callback_data="dev_list_users")],
+        [types.InlineKeyboardButton(text="رجوع للقائمة الرئيسية", callback_data="main_menu")]
+    ]
+    markup = types.InlineKeyboardMarkup(inline_keyboard=kb)
+    
+    await callback.message.edit_text(
+        f"لوحة تحكم المطور:\n\n"
+        f"إجمالي المجلدات/المسجلين: {total_users}\n"
+        f"اليوزربوتات النشطة حالياً: {active_bots}",
+        reply_markup=markup
+    )
+    await callback.answer()
+
+@dp.callback_query(lambda c: c.data == "dev_list_users")
+async def dev_list_users(callback: types.CallbackQuery):
+    if callback.from_user.id != DEV_ID:
+        return
+    res = supabase.table("user_bots").select("user_id, account_id, is_active").execute()
+    if not res.data:
+        await callback.answer("لا يوجد مستخدمين مسجلين بعد.", show_alert=True)
+        return
+        
+    kb = []
+    for row in res.data:
+        uid = row.get("user_id")
+        status = "نشط" if row.get("is_active") else "متوقف"
+        kb.append([types.InlineKeyboardButton(text=f"أيدي: {uid} ({status})", callback_data=f"dev_user_{uid}")])
+    kb.append([types.InlineKeyboardButton(text="رجوع لوحة المطور", callback_data="dev_admin_panel")])
+    markup = types.InlineKeyboardMarkup(inline_keyboard=kb)
+    await callback.message.edit_text("اختر المستخدم لإدارة حالته أو إلغاء تنصيبه:", reply_markup=markup)
+    await callback.answer()
+
+@dp.callback_query(lambda c: c.data.startswith("dev_user_"))
+async def dev_manage_user(callback: types.CallbackQuery):
+    if callback.from_user.id != DEV_ID:
+        return
+    target_uid = int(callback.data.replace("dev_user_", ""))
+    kb = [
+        [types.InlineKeyboardButton(text="إلغاء تنصيب وحذف الحساب", callback_data=f"dev_del_{target_uid}")],
+        [types.InlineKeyboardButton(text="رجوع للقائمة", callback_data="dev_list_users")]
+    ]
+    markup = types.InlineKeyboardMarkup(inline_keyboard=kb)
+    await callback.message.edit_text(f"إدارة المستخدم ذو الأيدي: {target_uid}", reply_markup=markup)
+    await callback.answer()
+
+@dp.callback_query(lambda c: c.data.startswith("dev_del_"))
+async def dev_delete_user(callback: types.CallbackQuery):
+    if callback.from_user.id != DEV_ID:
+        return
+    target_uid = int(callback.data.replace("dev_del_", ""))
+    supabase.table("user_bots").delete().eq("user_id", target_uid).execute()
+    await callback.answer("تم حذف وإلغاء تنصيب المستخدم بنجاح!", show_alert=True)
+    await dev_admin_panel(callback)
+
+# ==================== استقبال رقم الهاتف وتفعيل الحساب ====================
 @dp.message(lambda message: message.contact or (message.text and message.text.startswith("+")))
 async def handle_phone_input(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
@@ -286,7 +381,7 @@ async def process_password(message: types.Message, state: FSMContext):
         except: pass
         await state.clear()
 
-# ==================== لوحة التحكم والتحكم الفعلي بالإعدادات ====================
+# ==================== لوحة التحكم والإعدادات للمشتركين ====================
 @dp.callback_query(lambda c: c.data == "my_settings")
 async def settings_menu(callback: types.CallbackQuery):
     user_id = callback.from_user.id
@@ -334,7 +429,12 @@ async def set_clock_font(callback: types.CallbackQuery):
 
 @dp.callback_query(lambda c: c.data == "main_menu")
 async def back_to_main(callback: types.CallbackQuery):
-    await callback.message.edit_text("أهلاً بك مرة أخرى في القائمة الرئيسية:", reply_markup=get_main_menu_keyboard())
+    user_id = callback.from_user.id
+    welcome_text = (
+        "مرحباً بك في النظام المتطور لإدارة الحسابات واليوزربوت (AutoPro Bot).\n\n"
+        "اختر ما يناسبك من الأزرار أدناه:"
+    )
+    await callback.message.edit_text(welcome_text, reply_markup=get_main_menu_keyboard(user_id))
     await callback.answer()
 
 @dp.callback_query(lambda c: c.data == "set_forced")
@@ -348,7 +448,7 @@ async def save_forced_channel(message: types.Message, state: FSMContext):
     chan = message.text.strip().replace("@", "")
     user_id = message.from_user.id
     supabase.table("user_bots").update({"forced_channel": chan}).or_(f"user_id.eq.{user_id},account_id.eq.{user_id}").execute()
-    await message.answer(f"تم تعيين قناة الاشتراك الإجباري بنجاح إلى: @{chan}", reply_markup=get_main_menu_keyboard())
+    await message.answer(f"تم تعيين قناة الاشتراك الإجباري بنجاح إلى: @{chan}", reply_markup=get_main_menu_keyboard(user_id))
     await state.clear()
 
 @dp.callback_query(lambda c: c.data == "toggle_clock")
@@ -452,7 +552,6 @@ async def start_userbot(session_str, client_id):
         except Exception as e:
             print(f"[WARNING] لم يتم إنشاء قناة الأرشيف تلقائياً: {e}")
 
-        # معالج رسائل الخاص الفعلي (حفظ المؤقتة والستوريات ورياكشنات الكلوز وقفل الخاص)
         @client.on(events.NewMessage(incoming=True))
         async def incoming_handler(event):
             try:
@@ -470,7 +569,6 @@ async def start_userbot(session_str, client_id):
                     return
                 bot_config = res.data[0]
 
-                # 1. قفل الخاص (إذا كانت المفعلة)
                 if bot_config.get("lock_private_enabled", False):
                     try:
                         await event.reply("عذراً، الخاص مقفل حالياً بواسطة البوت.")
@@ -478,7 +576,6 @@ async def start_userbot(session_str, client_id):
                     except:
                         pass
 
-                # 2. فلتر الكلمات المحظورة
                 if bot_config.get("filter_enabled", True):
                     if any(bad in text for bad in BAD_WORDS):
                         try:
@@ -487,7 +584,6 @@ async def start_userbot(session_str, client_id):
                         except:
                             pass
 
-                # 3. حفظ فوري للوسائط المؤقتة وذاتية التدمير والستوريات في قناة الأرشيف
                 if bot_config.get("save_media_enabled", True) and event.message.media:
                     try:
                         target_dest = archive_channel if archive_channel else 'me'
@@ -498,7 +594,6 @@ async def start_userbot(session_str, client_id):
             except Exception as ex:
                 print(f"[ERROR] في معالجة الرسالة الواردة: {ex}")
 
-        # معالج الأوامر الحقيقي (غنيلي، شعر، مزج، ميمز، قرآن، يوت، كتم، حظر، الغاء حظر)
         @client.on(events.NewMessage(incoming=True, outgoing=True))
         async def commands_handler(event):
             try:
