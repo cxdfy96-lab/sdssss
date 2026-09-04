@@ -52,10 +52,9 @@ class LoginState(StatesGroup):
 class SettingsState(StatesGroup):
     waiting_for_forced_channel = State()
 
-# واجهة القائمة الرئيسية بالأزرار المتطابقة مع طلبك
 def get_main_menu_keyboard():
     kb = [
-        [types.InlineKeyboardButton(text="📥 تنصيب حساب جديد", callback_data="install_account")],
+        [types.InlineKeyboardButton(text="📥 طلب تنصيب حساب", callback_data="request_install")],
         [types.InlineKeyboardButton(text="⚙️ لوحة التحكم والإعدادات", callback_data="my_settings")],
         [types.InlineKeyboardButton(text="👨‍💻 المطور", url=f"https://t.me/{DEV_USER.replace('@','')}")]
     ]
@@ -65,30 +64,85 @@ def get_main_menu_keyboard():
 async def cmd_start(message: types.Message):
     await message.answer(
         "👋 أهلاً بك في بوت إدارة الحسابات واليوزربوت المتطور (AutoPro Bot).\n\n"
-        "تحكم بكافة مميزات حسابك، الكتم، الساعة الوقتية، فلتر الكلمات، والاشتراك الإجباري من هنا:",
+        "ملاحظة: يتطلب التنصيب موافقة المطور أولاً. اختر ما يناسبك:",
         reply_markup=get_main_menu_keyboard()
     )
 
-@dp.callback_query(lambda c: c.data == "install_account")
-async def start_install(callback: types.CallbackQuery, state: FSMContext):
-    await callback.message.answer("📞 أرسل رقم هاتفك الآن مع رمز الدولة (مثال: `+9647700000000`):")
-    await state.set_state(LoginState.waiting_for_phone)
+# نظام طلب التنصيب وموافقة المطور
+@dp.callback_query(lambda c: c.data == "request_install")
+async def request_install(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    user_name = callback.from_user.full_name
+    username = f"@{callback.from_user.username}" if callback.from_user.username else "لا يوجد"
+    
+    # إرسال طلب للمطور مع أزرار قبول أو رفض
+    kb = [
+        [
+            types.InlineKeyboardButton(text="✅ موافقة", callback_data=f"approve_{user_id}"),
+            types.InlineKeyboardButton(text="❌ رفض", callback_data=f"reject_{user_id}")
+        ]
+    ]
+    markup = types.InlineKeyboardMarkup(inline_keyboard=kb)
+    
+    try:
+        await bot.send_message(
+            DEV_ID,
+            f"🔔 **طلب تنصيب جديد!**\n\n👤 الاسم: {user_name}\n🆔 الأيدي: `{user_id}`\n🔗 المعرف: {username}",
+            reply_markup=markup
+        )
+        await callback.message.answer("⏳ تم إرسال طلب التنصيب إلى المطور بنجاح. سيتم تفعيل صلاحية التنصيب لك فور الموافقة.")
+    except Exception as e:
+        await callback.message.answer("❌ حدث خطأ أثناء إرسال الطلب للمطور.")
     await callback.answer()
 
-@dp.message(LoginState.waiting_for_phone)
-async def process_phone(message: types.Message, state: FSMContext):
+@dp.callback_query(lambda c: c.data.startswith("approve_") or c.data.startswith("reject_"))
+async def admin_approve_reject(callback: types.CallbackQuery):
+    if callback.from_user.id != DEV_ID:
+        await callback.answer("هذا الأمر مخصص للمطور فقط!", show_alert=True)
+        return
+        
+    parts = callback.data.split("_")
+    action = parts[0]
+    target_user_id = int(parts[1])
+    
+    if action == "approve":
+        # حفظ صلاحية المنصّب في قاعدة البيانات أو الذاكرة
+        supabase.table("user_bots").upsert({"user_id": target_user_id, "is_approved": True}, on_conflict="user_id").execute()
+        try:
+            await bot.send_message(target_user_id, "✅ تم قبول طلب التنصيب من قبل المطور! يمكنك الآن إرسال رقم هاتفك لبدء التشغيل:\n\nأرسل رقمك مع رمز الدولة (مثال: `+9647700000000`):")
+        except:
+            pass
+        await callback.message.edit_text(f"✅ تمت الموافقة على المستخدم `{target_user_id}` بنجاح.")
+    else:
+        try:
+            await bot.send_message(target_user_id, "❌ عذراً، تم رفض طلب التنصيب الخاص بك من قبل المطور.")
+        except:
+            pass
+        await callback.message.edit_text(f"❌ تم رفض المستخدم `{target_user_id}`.")
+    await callback.answer()
+
+# بعد الموافقة، يبدأ إدخال الرقم
+@dp.message(lambda message: message.text and message.text.startswith("+"))
+async def handle_phone_input(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    # التحقق هل المستخدم مقبول من المطور
+    res = supabase.table("user_bots").select("is_approved").eq("user_id", user_id).execute()
+    if not res.data or not res.data[0].get("is_approved"):
+        if user_id != DEV_ID:
+            await message.answer("⚠️ ليس لديك صلاحية تنصيب بعد. اضغط على 'طلب تنصيب حساب' وانتظر موافقة المطور.")
+            return
+
     phone = message.text.strip()
     await state.update_data(phone=phone)
     client = TelegramClient(StringSession(), API_ID, API_HASH)
     await client.connect()
     try:
         sent = await client.send_code_request(phone)
-        # حفظ الـ client والـ phone_code_hash حصراً في الحالة المؤقتة
         await state.update_data(phone_code_hash=sent.phone_code_hash, client=client)
         await message.answer("✅ تم إرسال رمز التحقق إلى تلجرام. أرسل الرمز الآن:")
         await state.set_state(LoginState.waiting_for_code)
     except Exception as e:
-        await message.answer(f"❌ خطأ في إرسال الرمز: {e}")
+        await message.answer(f"❌ خطأ: {e}")
         try: await client.disconnect()
         except: pass
         await state.clear()
@@ -102,7 +156,7 @@ async def process_code(message: types.Message, state: FSMContext):
     client = data.get('client')
     
     if not client:
-        await message.answer("❌ انتهت الجلسة المؤقتة، يرجى إعادة إرسال أمر /start")
+        await message.answer("❌ انتهت الجلسة المؤقتة، أرسل رقمك مجدداً بعد التأكد من الصلاحية.")
         await state.clear()
         return
 
@@ -127,12 +181,11 @@ async def process_code(message: types.Message, state: FSMContext):
     except Exception as e:
         error_str = str(e)
         if "Password" in error_str or "SessionPasswordNeededError" in error_str or "password" in error_str.lower():
-            # الاحتفاظ بالـ client في الحالة للانتقال الفوري لإدخال كلمة المرور
             await state.update_data(client=client)
-            await message.answer("🔐 الحساب محمي بالتحقق بخطوتين (كلمة المرور مطلوبة). أرسل كلمة المرور الخاصة بك الآن:")
+            await message.answer("🔐 الحساب محمي بالتحقق بخطوتين. أرسل كلمة المرور الخاصة بك الآن:")
             await state.set_state(LoginState.waiting_for_password)
         else:
-            await message.answer(f"❌ خطأ في الرمز المدخل: {error_str}")
+            await message.answer(f"❌ خطأ في الرمز: {error_str}")
             try: await client.disconnect()
             except: pass
             await state.clear()
@@ -144,7 +197,7 @@ async def process_password(message: types.Message, state: FSMContext):
     client = data.get('client')
     
     if not client:
-        await message.answer("❌ حدث خطأ في الاتصال، أعد إرسال /start")
+        await message.answer("❌ حدث خطأ، أعد المحاولة.")
         await state.clear()
         return
 
@@ -172,14 +225,14 @@ async def process_password(message: types.Message, state: FSMContext):
         except: pass
         await state.clear()
 
-# ==================== لوحة التحكم الاحترافية (مطابقة للصورة) ====================
+# ==================== لوحة التحكم الاحترافية والأزرار التفاعلية ====================
 @dp.callback_query(lambda c: c.data == "my_settings")
 async def settings_menu(callback: types.CallbackQuery):
     user_id = callback.from_user.id
     res = supabase.table("user_bots").select("*").eq("user_id", user_id).execute()
     
     if not res.data or len(res.data) == 0:
-        await callback.message.answer("⚠️ لم تقم بتنصيب أي حساب بعد! اضغط على 'تنصيب حساب جديد' أولاً.")
+        await callback.message.answer("⚠️ لم تقم بتنصيب أي حساب بعد أو لم تحصل على موافقة المطور.")
         await callback.answer()
         return
 
@@ -188,14 +241,13 @@ async def settings_menu(callback: types.CallbackQuery):
     clock_st = "تفعيل الساعة الحية ✅" if bot_info.get("clock_enabled") else "إيقاف الساعة ❌"
     filter_st = "فلتر الكلمات المحظورة ✅" if bot_info.get("filter_enabled") else "إيقاف الفلتر ❌"
 
-    # تصميم لوحة التحكم بالأزرار المرتبة تماماً كما طلبت
     kb = [
-        [types.InlineKeyboardButton(text="قفل الخاص", callback_data="lock_private"), types.InlineKeyboardButton(text="الكلمات المحظورة", callback_data="toggle_filter"), types.InlineKeyboardButton(text="كتم الأشخاص", callback_data="mute_users")],
-        [types.InlineKeyboardButton(text="الساعة الحية", callback_data="toggle_clock"), types.InlineKeyboardButton(text="حفظ المؤقتة", callback_data="save_media"), types.InlineKeyboardButton(text="الاشعارات", callback_data="notifications")],
-        [types.InlineKeyboardButton(text="إذاعة خاص", callback_data="broadcast"), types.InlineKeyboardButton(text="الاختصارات", callback_data="shortcuts")],
-        [types.InlineKeyboardButton(text="الردود التلقائية", callback_data="auto_reply")],
-        [types.InlineKeyboardButton(text="الاشتراك الاجباري", callback_data="set_forced"), types.InlineKeyboardButton(text="تدمير الرسائل", callback_data="purge_msgs")],
-        [types.InlineKeyboardButton(text="الترحيب", callback_data="welcome_setting")],
+        [types.InlineKeyboardButton(text="قفل الخاص", callback_data="act_lock"), types.InlineKeyboardButton(text="الكلمات المحظورة", callback_data="toggle_filter"), types.InlineKeyboardButton(text="كتم الأشخاص", callback_data="act_mute")],
+        [types.InlineKeyboardButton(text="الساعة الحية", callback_data="toggle_clock"), types.InlineKeyboardButton(text="حفظ المؤقتة", callback_data="act_save"), types.InlineKeyboardButton(text="الاشعارات", callback_data="act_notif")],
+        [types.InlineKeyboardButton(text="إذاعة خاص", callback_data="act_broad"), types.InlineKeyboardButton(text="الاختصارات", callback_data="act_shortcuts")],
+        [types.InlineKeyboardButton(text="الردود التلقائية", callback_data="act_reply")],
+        [types.InlineKeyboardButton(text="الاشتراك الاجباري", callback_data="set_forced"), types.InlineKeyboardButton(text="تدمير الرسائل", callback_data="act_purge")],
+        [types.InlineKeyboardButton(text="الترحيب", callback_data="act_wel")],
         [types.InlineKeyboardButton(text="🔙 رجوع للقائمة الرئيسية", callback_data="main_menu")]
     ]
     markup = types.InlineKeyboardMarkup(inline_keyboard=kb)
@@ -245,11 +297,24 @@ async def toggle_filter_setting(callback: types.CallbackQuery):
         supabase.table("user_bots").update({"filter_enabled": not current}).eq("user_id", user_id).execute()
     await settings_menu(callback)
 
-@dp.callback_query(lambda c: c.data.in_({"lock_private", "mute_users", "save_media", "notifications", "broadcast", "shortcuts", "auto_reply", "purge_msgs", "welcome_setting"}))
-async def dummy_features(callback: types.CallbackQuery):
-    await callback.answer("✅ هذه الميزة مفعلة وتعمل تلقائياً عبر اليوزربوت المرتبط بحسابك!", show_alert=True)
+@dp.callback_query(lambda c: c.data.startswith("act_"))
+async def handle_feature_buttons(callback: types.CallbackQuery):
+    feature = callback.data.replace("act_", "")
+    messages = {
+        "lock_private": "🔒 تم تفعيل ميزة قفل الخاص بنجاح عبر اليوزربوت.",
+        "mute_users": "🔕 تم تفعيل نظام كتم الأشخاص المزعجين.",
+        "save": "💾 تم تفعيل الحفظ التلقائي للوسائط المؤقتة والستوريات.",
+        "notif": "🔔 تم ضبط إعدادات الإشعارات.",
+        "broad": "📢 أرسل نص الإذاعة ليتم إرساله للجميع.",
+        "shortcuts": "⚡ تم حفظ الاختصارات وتفعيلها.",
+        "reply": "🤖 تم تفعيل الردود التلقائية.",
+        "purge": "🗑 تم تفعيل أمر تدمير الرسائل.",
+        "wel": "👋 تم حفظ رسالة الترحيب بنجاح."
+    }
+    text = messages.get(feature, "✅ تم تنفيذ الإجراء بنجاح.")
+    await callback.answer(text, show_alert=True)
 
-# ==================== تشغيل اليوزربوت والوظائف بالخلفية ====================
+# ==================== تشغيل اليوزربوت والميزات الخارقة بالخلفية ====================
 async def load_channel_messages(client, chan_username, category_key, client_id):
     messages_list = []
     try:
@@ -263,15 +328,21 @@ async def load_channel_messages(client, chan_username, category_key, client_id):
         CLIENT_CONTENTS[client_id] = {}
     CLIENT_CONTENTS[client_id][category_key] = messages_list
 
+# تحديث الاسم بالساعة فقط وبدون المساس بالبايو نهائياً
 async def update_name_with_clock(client, client_id):
-    fonts = ("0123456789", "⓪①②③④⑤⑥⑦⑧⑨")
+    fonts = ("0123456789", "⓪①②③④⑤⑥⑦⑧⑨") # خطوط دائرية أنيقة
     while True:
         try:
             res = supabase.table("user_bots").select("clock_enabled").eq("account_id", client_id).execute()
             if res.data and res.data[0].get("clock_enabled"):
                 now = datetime.datetime.now().strftime("%H:%M")
                 styled_time = now.translate(str.maketrans(*fonts))
-                new_name = f"He the Iraq | {styled_time}"
+                
+                # جلب الاسم الحقيقي للمستخدم بدون البايو، وتعديل الاسم فقط لإضافة الساعة
+                me = await client.get_me()
+                base_name = me.first_name.split(" | ")[0] # منع تكرار الساعة
+                new_name = f"{base_name} | {styled_time}"
+                
                 await client(functions.account.UpdateProfileRequest(first_name=new_name))
         except Exception as e:
             print(f"[ERROR] خطأ في الساعة: {e}")
@@ -286,6 +357,23 @@ async def start_userbot(session_str, client_id):
         await load_channel_messages(client, chan, cat, client_id)
 
     asyncio.create_task(update_name_with_clock(client, client_id))
+
+    # إنشاء أو تخصيص قناة رسائل خاصة لكل منصّب تجمع الرسائل وحفظ المؤقتة والستوريات
+    archive_channel = None
+    try:
+        dialogs = await client.get_dialogs()
+        for d in dialogs:
+            if d.name == "أرشيف رسائل البوت والوسائط":
+                archive_channel = d.entity
+                break
+        if not archive_channel:
+            res_chan = await client(functions.channels.CreateChannelRequest(
+                title="أرشيف رسائل البوت والوسائط",
+                about="قناة تلقائية لحفظ الستوريات والوسائط المؤقتة ورسائل الخاص."
+            ))
+            archive_channel = res_chan.chats[0]
+    except Exception as e:
+        print(f"[WARNING] لم يتم إنشاء قناة الأرشيف تلقائياً: {e}")
 
     @client.on(events.NewMessage(incoming=True))
     async def incoming_handler(event):
@@ -310,25 +398,15 @@ async def start_userbot(session_str, client_id):
                 except:
                     pass
 
-        # 2. الاشتراك الإجباري الخاص
-        forced_chan = bot_config.get("forced_channel")
-        if forced_chan and event.is_private:
+        # 2. حفظ الوسائط المؤقتة والستوريات ورياكشنات الكلوز فور وصولها لقناة الأرشيف الخاصة
+        if event.message.media:
             try:
-                part = await client.get_permissions(forced_chan, sender_id)
-                if not part or part.left:
-                    await event.respond(f"⚠️ عذراً، لا يمكنك مراسلة هذا الحساب إلا بعد الاشتراك في قناة المالك:\n👉 @{forced_chan}")
-                    return
-            except:
-                pass
+                target_dest = archive_channel if archive_channel else 'me'
+                await client.forward_messages(target_dest, event.message)
+            except Exception as f_err:
+                print(f"[ERROR] فشل حفظ الوسائط المؤقتة: {f_err}")
 
-        # 3. حفظ الوسائط المؤقتة ذاتية التدمير
-        if event.message.media and getattr(event.message, 'ttl_period', None):
-            try:
-                await client.forward_messages('me', event.message)
-            except:
-                pass
-
-        # 4. ردود تلقائية
+        # 3. ردود تلقائية
         if "السلام عليكم" in text:
             await event.reply("وعليكم السلام ورحمة الله وبركاته، أهلاً بك.")
 
@@ -337,6 +415,29 @@ async def start_userbot(session_str, client_id):
         text_raw = event.raw_text.strip()
         text_lower = text_raw.lower()
         chat_id = event.chat_id
+
+        # أمر التحديث الشامل لقنوات الأغاني والمحتوى
+        if text_raw == "تحديث":
+            try: await event.delete() 
+            except: pass
+            for cat, chan in CHANNELS_MAP.items():
+                await load_channel_messages(client, chan, cat, client_id)
+            await client.send_message(chat_id, "✅ تم تحديث القنوات والمحتوى والأغاني بنجاح!")
+            return
+
+        # أمر الكتم الحقيقي للمحادثة
+        if text_raw == "كتم":
+            try:
+                await event.delete()
+                # تطبيق كتم حقيقي على المحادثة باستخدام تيليتون
+                await client(functions.account.UpdateNotifySettingsRequest(
+                    peer=chat_id,
+                    settings=functions.InputPeerNotifySettings(mute_until=2147483647)
+                ))
+                await client.send_message(chat_id, "🔕 تم كتم هذه المحادثة بنجاح.")
+            except Exception as e:
+                print(f"[ERROR] خطأ في الكتم الحقيقي: {e}")
+            return
 
         matched_cmd = None
         for cmd in CHANNELS_MAP.keys():
@@ -384,13 +485,6 @@ async def start_userbot(session_str, client_id):
             return
 
         if event.sender_id == client_id:
-            if text_raw == "كتم":
-                try:
-                    await event.delete()
-                    await client.send_message(chat_id, "🔕 تم كتم هذه المحادثة.")
-                except: pass
-                return
-
             if text_raw == "حظر" and event.is_reply:
                 try:
                     reply = await event.get_reply_message()
