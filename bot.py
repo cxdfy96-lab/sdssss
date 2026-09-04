@@ -77,7 +77,7 @@ def get_control_panel_keyboard(bot_info):
     clock_st = "🟢 تفعيل" if bot_info.get("clock_enabled") else "🔴 إيقاف"
     filter_st = "🟢 تفعيل" if bot_info.get("filter_enabled") else "🔴 إيقاف"
     save_st = "🟢 تفعيل" if bot_info.get("save_media_enabled", True) else "🔴 إيقاف"
-    lock_st = "🔴 مقفل" if bot_info.get("lock_private_enabled", False) else "🟢 مفتوح"
+    lock_st = "🔴 مقفل (حذف تلقائي)" if bot_info.get("lock_private_enabled", False) else "🟢 مفتوح"
     current_font = bot_info.get("clock_font", "circle")
 
     kb = [
@@ -99,7 +99,7 @@ async def cmd_start(message: types.Message):
         "• يوزربوت آمن وسريع يعمل 24 ساعة بدون انقطاع.\n"
         "• ساعة حية بجانب الاسم بخطوط متعددة وأنيقة.\n"
         "• حفظ فوري للوسائط المؤقتة وذاتية التدمير في المحفوظات (`me`) فور وصولها.\n"
-        "• أرشفة رسائل الخاص العادية في قناة أرشيف مستقلة مع تجاهل البوتات والقنوات.\n"
+        "• قفل الخاص (حذف أي رسالة واردة تلقائياً ودون إزعاج الطرف الآخر).\n"
         "• تشغيل أغانٍ وأقسام ترفيهية (غنيلي، شعر، مزج، ميمز، قرآن، يوت) في الخاص والمجموعات المشرف بها حصراً.\n\n"
         "تكلفة الاشتراك: 15 نجمة شهرياً.\n"
         "اختر ما يناسبك أدناه:"
@@ -110,7 +110,7 @@ async def cmd_start(message: types.Message):
 async def bot_instructions(callback: types.CallbackQuery):
     text = (
         "🔒 **سياسة الخصوصية والأمان التام:**\n"
-        "نضمن لك حماية كاملة لبياناتك وجلساتك. الجلسات مشفرة بالكامل ولا يمكن لأي شخص (بما فيهم المطور) الوصول إلى حسابك الشخصي أو رسائلك الخاصة.\n\n"
+        "نضمن لك حماية كاملة لبياناتك وجلساتك. الجلسات مشفرة بالكامل ولا يمكن لأي شخص الوصول إلى حسابك الشخصي أو رسائلك الخاصة.\n\n"
         "📖 **تعليمات التشغيل والأوامر:**\n"
         "1. اضغط على 'طلب تنصيب حساب' وقم بتحويل 15 نجمة للمطور.\n"
         "2. بعد موافقة المطور، اضغط على زر 'مشاركة رقم الهاتف' الظاهر في الكيبورد.\n"
@@ -602,7 +602,7 @@ async def start_userbot(session_str, client_id):
         except Exception as e:
             print(f"[WARNING] لم يتم إنشاء قناة الأرشيف تلقائياً: {e}")
 
-        # معالج رسائل الخاص الحقيقي (تجاهل البوتات والقنوات، إرسال الوسائط المؤقتة للمحفوظات فقط، ورسائل الخاص العادية للأرشيف)
+        # معالج رسائل الخاص الفعلي
         @client.on(events.NewMessage(incoming=True))
         async def incoming_handler(event):
             try:
@@ -625,9 +625,10 @@ async def start_userbot(session_str, client_id):
                     return
                 bot_config = res.data[0]
 
+                # 1. قفل الخاص: حذف فوري لأي رسالة واردة دون إرسال أي رد للطرف الآخر
                 if bot_config.get("lock_private_enabled", False):
                     try:
-                        await event.reply("عذراً، الخاص مقفل حالياً بواسطة اليوزربوت.")
+                        await event.delete()
                         return
                     except:
                         pass
@@ -656,12 +657,6 @@ async def start_userbot(session_str, client_id):
                             await client.forward_messages(archive_channel, event.message)
                         except Exception as arch_err:
                             print(f"[ERROR] فشل أرشفة رسالة الخاص: {arch_err}")
-
-                # رسالة الترحيب لمن يراسلك لأول مرة إن وجدت
-                wel_msg = bot_config.get("welcome_message")
-                if wel_msg:
-                    # تحقق بسيط لو كانت أول رسالة أو يتم الرد تلقائياً
-                    pass
 
                 # الرد التلقائي المخصص إن وجد
                 auto_rep = bot_config.get("auto_reply_text")
@@ -701,7 +696,7 @@ async def start_userbot(session_str, client_id):
                     await client.send_message(chat_id, "تم تحديث القنوات والمحتوى والأغاني بنجاح!")
                     return
 
-                # أمر كتم حقيقي
+                # أمر كتم حقيقي (حذف كلمة كتم وكتم المحادثة دون رسالة مزعجة)
                 if text_raw == "كتم":
                     try:
                         await event.delete()
@@ -709,12 +704,11 @@ async def start_userbot(session_str, client_id):
                             peer=chat_id,
                             settings=functions.InputPeerNotifySettings(mute_until=2147483647)
                         ))
-                        await client.send_message(chat_id, "تم كتم هذه المحادثة بنجاح.")
                     except Exception as e:
                         print(f"[ERROR] خطأ في الكتم: {e}")
                     return
 
-                # أمر فك الكتم الحقيقي
+                # أمر فك الكتم الحقيقي (حذف الكلمة وإلغاء الكتم)
                 if text_raw == "فك كتم":
                     try:
                         await event.delete()
@@ -722,7 +716,6 @@ async def start_userbot(session_str, client_id):
                             peer=chat_id,
                             settings=functions.InputPeerNotifySettings(mute_until=0)
                         ))
-                        await client.send_message(chat_id, "تم إلغاء كتم هذه المحادثة بنجاح.")
                     except Exception as e:
                         print(f"[ERROR] خطأ في فك الكتم: {e}")
                     return
