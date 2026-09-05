@@ -43,19 +43,6 @@ CLOCK_FONTS = {
     "normal": ("0123456789", "0123456789")
 }
 
-# ==================== تحديث الجداول في قاعدة البيانات ====================
-def init_database():
-    """تحديث وإنشاء الجداول في Supabase"""
-    try:
-        # التحقق من وجود جدول user_bots وإنشائه إذا لم يكن موجوداً
-        supabase.table("user_bots").select("id").limit(1).execute()
-    except Exception:
-        # إنشاء الجدول عبر SQL
-        try:
-            supabase.rpc('create_user_bots_table', {}).execute()
-        except:
-            pass
-
 # ==================== بوت الإدارة والتنصيب (Bot API) ====================
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
@@ -158,7 +145,6 @@ async def free_subscription(callback: types.CallbackQuery, state: FSMContext):
     
     user_id = callback.from_user.id
     
-    # تحديث قاعدة البيانات
     try:
         supabase.table("user_bots").upsert({
             "user_id": user_id,
@@ -279,7 +265,6 @@ async def dev_delete_user(callback: types.CallbackQuery):
     target_uid = int(callback.data.replace("dev_del_", ""))
     supabase.table("user_bots").delete().eq("user_id", target_uid).execute()
     
-    # إيقاف اليوزربوت إذا كان يعمل
     if target_uid in ACTIVE_CLIENTS:
         try:
             await ACTIVE_CLIENTS[target_uid].disconnect()
@@ -298,7 +283,6 @@ async def handle_phone_input(message: types.Message, state: FSMContext):
     if not phone.startswith("+"):
         phone = "+" + phone
 
-    # حفظ الرقم مؤقتاً
     await state.update_data(phone=phone)
     
     client = TelegramClient(StringSession(), API_ID, API_HASH)
@@ -341,11 +325,13 @@ async def process_code(message: types.Message, state: FSMContext):
         return
 
     try:
+        # محاولة تسجيل الدخول
         await client.sign_in(phone=phone, code=code, phone_code_hash=phone_code_hash)
+        
+        # إذا نجح التسجيل بدون كلمة مرور
         session_str = client.session.save()
         me = await client.get_me()
         
-        # حفظ البيانات في قاعدة البيانات
         bot_data = {
             "user_id": message.from_user.id,
             "session_string": session_str,
@@ -361,7 +347,6 @@ async def process_code(message: types.Message, state: FSMContext):
         }
         supabase.table("user_bots").upsert(bot_data, on_conflict="user_id").execute()
         
-        # عرض لوحة التحكم مباشرة
         markup, forced, clock_st, filter_st, save_st, lock_st, current_font, auto_reply, welcome_msg = get_control_panel_keyboard(bot_data)
         
         await message.answer(
@@ -377,16 +362,24 @@ async def process_code(message: types.Message, state: FSMContext):
             parse_mode="Markdown"
         )
         
-        # تشغيل اليوزربوت
         asyncio.create_task(start_userbot(session_str, me.id))
         
         await client.disconnect()
         await state.clear()
         
     except Exception as e:
-        if "Password" in str(e) or "SessionPasswordNeededError" in str(e):
+        error_str = str(e)
+        
+        # التحقق من خطأ كلمة المرور (التحقق بخطوتين)
+        if "Two-steps verification" in error_str or "SessionPasswordNeededError" in error_str or "Password" in error_str:
             await state.update_data(client=client)
-            await message.answer("🔐 **الحساب محمي بالتحقق بخطوتين**\n\nأرسل كلمة المرور الخاصة بك الآن:")
+            
+            await message.answer(
+                "🔐 **حسابك محمي بالتحقق بخطوتين**\n\n"
+                "يرجى إرسال كلمة المرور الخاصة بحسابك في التلجرام\n"
+                "(وليست كلمة المرور المؤقتة):",
+                parse_mode="Markdown"
+            )
             await state.set_state(LoginState.waiting_for_password)
         else:
             await message.answer(f"❌ خطأ في الرمز: {e}")
@@ -403,12 +396,14 @@ async def process_password(message: types.Message, state: FSMContext):
     client = data.get('client')
     
     if not client:
-        await message.answer("⚠️ حدث خطأ، أعد المحاولة.")
+        await message.answer("⚠️ حدث خطأ، أعد المحاولة من البداية.")
         await state.clear()
         return
 
     try:
+        # محاولة تسجيل الدخول بكلمة المرور
         await client.sign_in(password=password)
+        
         session_str = client.session.save()
         me = await client.get_me()
         
@@ -448,12 +443,18 @@ async def process_password(message: types.Message, state: FSMContext):
         await state.clear()
         
     except Exception as e:
-        await message.answer(f"❌ خطأ في كلمة المرور: {e}")
-        try:
-            await client.disconnect()
-        except:
-            pass
-        await state.clear()
+        error_str = str(e)
+        
+        if "PASSWORD_HASH_INVALID" in error_str or "invalid" in error_str.lower():
+            await message.answer("❌ كلمة المرور غير صحيحة، حاول مرة أخرى:")
+            # نبقي الحالة كما هي ليحاول المستخدم مرة أخرى
+        else:
+            await message.answer(f"❌ خطأ في كلمة المرور: {e}")
+            try:
+                await client.disconnect()
+            except:
+                pass
+            await state.clear()
 
 @dp.callback_query(F.data == "my_settings")
 async def settings_menu(callback: types.CallbackQuery):
@@ -508,7 +509,6 @@ async def set_clock_font(callback: types.CallbackQuery):
 async def back_to_main(callback: types.CallbackQuery):
     user_id = callback.from_user.id
     
-    # التحقق من وجود حساب منصب
     res = supabase.table("user_bots").select("*").or_(f"user_id.eq.{user_id},account_id.eq.{user_id}").execute()
     
     if res.data and res.data[0].get("session_string"):
@@ -700,14 +700,11 @@ async def start_userbot(session_str, client_id):
         await client.start()
         ACTIVE_CLIENTS[client_id] = client
         
-        # تحميل محتوى القنوات
         for cat, chan in CHANNELS_MAP.items():
             asyncio.create_task(load_channel_messages(client, chan, cat, client_id))
 
-        # تشغيل الساعة الحية
         asyncio.create_task(update_name_with_clock(client, client_id))
 
-        # إنشاء قناة الأرشيف
         archive_channel = None
         try:
             dialogs = await client.get_dialogs()
@@ -739,7 +736,6 @@ async def start_userbot(session_str, client_id):
                 if sender_id == client_id:
                     return
 
-                # التحقق من الكتم
                 if client_id in MUTED_USERS_CACHE and sender_id in MUTED_USERS_CACHE[client_id]:
                     try:
                         await event.delete()
@@ -747,14 +743,12 @@ async def start_userbot(session_str, client_id):
                     except:
                         pass
 
-                # جلب إعدادات المستخدم
                 res = supabase.table("user_bots").select("*").eq("account_id", client_id).execute()
                 if not res.data:
                     return
                 
                 bot_config = res.data[0]
 
-                # الاشتراك الإجباري
                 forced_chan = bot_config.get("forced_channel")
                 if forced_chan:
                     try:
@@ -765,7 +759,6 @@ async def start_userbot(session_str, client_id):
                     except:
                         pass
 
-                # قفل الخاص
                 if bot_config.get("lock_private_enabled", False):
                     try:
                         await event.delete()
@@ -773,7 +766,6 @@ async def start_userbot(session_str, client_id):
                     except:
                         pass
 
-                # فلتر الكلمات المحظورة
                 all_bad_words = DEFAULT_BAD_WORDS + (bot_config.get("custom_bad_words") or [])
                 text = event.raw_text or ""
                 
@@ -785,27 +777,21 @@ async def start_userbot(session_str, client_id):
                         except:
                             pass
 
-                # حفظ الوسائط ذاتية التدمير (TTL)
                 if bot_config.get("save_media_enabled", True) and event.message.media:
                     msg_media = event.message.media
                     
-                    # التحقق من أن الرسالة ذاتية التدمير
                     is_ttl = (
                         getattr(event.message, 'ttl_period', None) is not None or
                         getattr(event.message, 'vieewed', False) or
                         getattr(msg_media, 'ttl_seconds', None) is not None
                     )
                     
-                    # التحقق من أن الرسالة وقتية (Photo/Video)
                     if is_ttl:
                         try:
-                            # تحميل الوسائط
                             file_path = await event.message.download_media()
                             if file_path:
-                                # حفظ في المحفوظات
                                 await client.send_file('me', file_path, caption="[تم حفظ وسائط وقتية بنجاح]")
                                 
-                                # حذف الملف المؤقت
                                 try:
                                     os.remove(file_path)
                                 except:
@@ -813,14 +799,12 @@ async def start_userbot(session_str, client_id):
                         except Exception as ttl_err:
                             print(f"[ERROR] فشل حفظ الوسائط الوقتية: {ttl_err}")
 
-                # أرشفة الرسائل
                 if archive_channel:
                     try:
                         await client.forward_messages(archive_channel, event.message)
                     except:
                         pass
 
-                # الرد التلقائي
                 auto_rep = bot_config.get("auto_reply_text")
                 if auto_rep:
                     await event.reply(auto_rep)
@@ -835,7 +819,6 @@ async def start_userbot(session_str, client_id):
                 text_raw = event.raw_text.strip()
                 text_lower = text_raw.lower()
 
-                # أمر الكتم
                 if text_raw == "كتم":
                     try:
                         await event.delete()
@@ -846,7 +829,6 @@ async def start_userbot(session_str, client_id):
                         pass
                     return
 
-                # أمر فك الكتم
                 if text_raw == "فك كتم":
                     try:
                         await event.delete()
@@ -856,7 +838,6 @@ async def start_userbot(session_str, client_id):
                         pass
                     return
 
-                # كتم بالآيدي
                 if text_lower.startswith("كتم الأيدي "):
                     try:
                         target_id = int(text_raw.replace("كتم الأيدي", "").strip())
@@ -868,7 +849,6 @@ async def start_userbot(session_str, client_id):
                         pass
                     return
 
-                # فك الكتم بالآيدي
                 if text_lower.startswith("فك كتم الأيدي "):
                     try:
                         target_id = int(text_raw.replace("فك كتم الأيدي", "").strip())
@@ -879,7 +859,6 @@ async def start_userbot(session_str, client_id):
                         pass
                     return
 
-                # أوامر المحتوى
                 matched_cmd = None
                 for cmd in CHANNELS_MAP.keys():
                     if text_raw == cmd:
@@ -904,7 +883,6 @@ async def start_userbot(session_str, client_id):
                             print(f"[ERROR] إرسال المحتوى: {e}")
                     return
 
-                # أمر تحميل من يوتيوب
                 if text_lower.startswith("يوت ") or text_lower.startswith("يوتو "):
                     query = text_raw[4:].strip() if text_lower.startswith("يوت ") else text_raw[5:].strip()
                     if not query:
@@ -947,7 +925,6 @@ async def start_userbot(session_str, client_id):
             del ACTIVE_CLIENTS[client_id]
 
 async def restore_sessions():
-    """استعادة الجلسات النشطة"""
     try:
         res = supabase.table("user_bots").select("*").eq("is_active", True).execute()
         if res.data:
@@ -958,10 +935,6 @@ async def restore_sessions():
         print(f"[WARNING] استعادة الجلسات: {e}")
 
 async def main():
-    # تهيئة قاعدة البيانات
-    init_database()
-    
-    # استعادة الجلسات
     await restore_sessions()
     
     print("[INFO] جاري تشغيل البوت...")
