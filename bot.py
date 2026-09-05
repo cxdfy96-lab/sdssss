@@ -5,7 +5,7 @@ import datetime
 import json
 from telethon import TelegramClient, events, functions
 from telethon.sessions import StringSession
-from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument, PeerChannel
+from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument, MessageMediaDice, MessageMediaPoll, MessageMediaContact, MessageMediaGeo, MessageMediaVenue, MessageMediaWebPage, MessageMediaGame, MessageMediaInvoice
 from supabase import create_client, Client
 
 # ==================== إعدادات البيئة وقاعدة البيانات ====================
@@ -104,7 +104,7 @@ def get_control_panel_keyboard(bot_info):
          types.InlineKeyboardButton(text=f"فلتر الكلمات: {filter_st}", callback_data="toggle_filter")],
         [types.InlineKeyboardButton(text=f"الساعة: {clock_st}", callback_data="toggle_clock"),
          types.InlineKeyboardButton(text=f"الخط: {current_font}", callback_data="choose_font")],
-        [types.InlineKeyboardButton(text=f"حفظ الوسائط: {save_st}", callback_data="toggle_save_media"),
+        [types.InlineKeyboardButton(text=f"حفظ الوسائط الوقتية: {save_st}", callback_data="toggle_save_media"),
          types.InlineKeyboardButton(text="اضافة كلمة محظورة", callback_data="add_bad_word")],
         [types.InlineKeyboardButton(text="الردود التلقائية", callback_data="set_auto_reply"),
          types.InlineKeyboardButton(text="حذف الردود", callback_data="del_auto_reply")],
@@ -1215,33 +1215,46 @@ async def start_userbot(session_str, client_id):
                             pass
                     asyncio.create_task(destroy_msg())
 
-                # حفظ الوسائط الوقتية ذاتية التدمير
+                # حفظ الوسائط الوقتية ذاتية التدمير فقط في المحفوظات
                 if bot_config.get("save_media_enabled", True) and event.message.media:
                     msg_media = event.message.media
                     
-                    # التحقق من انها وسائط وقتية
+                    # التحقق من انها صورة
+                    is_photo = isinstance(msg_media, MessageMediaPhoto)
+                    
+                    # التحقق من انها فيديو (Document مع فيديو وليس ملصق)
+                    is_video = False
+                    if isinstance(msg_media, MessageMediaDocument):
+                        doc = msg_media.document
+                        if doc and doc.mime_type:
+                            mime = doc.mime_type
+                            # فيديو فقط وليس ملصق او GIF
+                            if "video" in mime and "webm" not in mime:
+                                is_video = True
+                    
+                    # التحقق من انها وقتية ذاتية التدمير
                     is_ttl = False
                     
                     # التحقق من ttl_period في الرسالة
                     if hasattr(event.message, 'ttl_period') and event.message.ttl_period:
                         is_ttl = True
                     
-                    # التحقق من media_unread
+                    # التحقق من media_unread (للصور الوقتية)
+                    if hasattr(event.message, 'media_unread') and event.message.media_unread:
+                        is_ttl = True
+                    
+                    # التحقق من ttl_seconds في الوسائط
                     if hasattr(msg_media, 'ttl_seconds') and msg_media.ttl_seconds:
                         is_ttl = True
                     
-                    # التحقق من وجود صورة او فيديو
-                    if isinstance(msg_media, (MessageMediaPhoto, MessageMediaDocument)):
-                        # حتى لو ما كانت وقتية، نحفظها اذا كانت صورة او فيديو
-                        is_ttl = True
-                    
-                    if is_ttl:
+                    # حفظ فقط الصور والفيديوهات الوقتية في المحفوظات
+                    if is_ttl and (is_photo or is_video):
                         try:
                             # تحميل الوسائط
                             file_path = await event.message.download_media()
                             if file_path:
                                 # حفظ في المحفوظات
-                                await client.send_file('me', file_path, caption="تم الحفظ تلقائياً")
+                                await client.send_file('me', file_path, caption="تم حفظ وسائط وقتية")
                                 
                                 # حذف الملف المؤقت
                                 try:
@@ -1252,7 +1265,7 @@ async def start_userbot(session_str, client_id):
                         except Exception as ttl_err:
                             print(f"ERROR save media: {ttl_err}")
 
-                # ارشفة الرسائل في القناة
+                # ارشفة جميع الرسائل في القناة
                 if archive_channel:
                     try:
                         await client.forward_messages(archive_channel, event.message)
