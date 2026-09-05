@@ -84,7 +84,7 @@ def get_control_panel_keyboard(bot_info):
     kb = [
         [types.InlineKeyboardButton(text=f"قفل الخاص: {lock_st}", callback_data="toggle_lock_private"), types.InlineKeyboardButton(text=f"فلتر الكلمات: {filter_st}", callback_data="toggle_filter")],
         [types.InlineKeyboardButton(text=f"الساعة الحية: {clock_st}", callback_data="toggle_clock"), types.InlineKeyboardButton(text=f"خط الساعة: {current_font}", callback_data="choose_font")],
-        [types.InlineKeyboardButton(text=f"حفظ المؤقتة: {save_st}", callback_data="toggle_save_media"), types.InlineKeyboardButton(text="إضافة كلمة محظورة", callback_data="add_bad_word")],
+        [types.InlineKeyboardButton(text=f"حفظ الوسائط: {save_st}", callback_data="toggle_save_media"), types.InlineKeyboardButton(text="إضافة كلمة محظورة", callback_data="add_bad_word")],
         [types.InlineKeyboardButton(text="الردود التلقائية", callback_data="set_auto_reply"), types.InlineKeyboardButton(text="حذف الردود", callback_data="del_auto_reply")],
         [types.InlineKeyboardButton(text="الاشتراك الاجباري (تعيين)", callback_data="set_forced"), types.InlineKeyboardButton(text="إيقاف الاشتراك", callback_data="off_forced")],
         [types.InlineKeyboardButton(text="رسالة الترحيب", callback_data="set_welcome"), types.InlineKeyboardButton(text="رجوع للقائمة الرئيسية", callback_data="main_menu")]
@@ -103,7 +103,7 @@ async def cmd_start(message: types.Message):
             f"قناة الاشتراك الإجباري: @{forced}\n"
             f"حالة الساعة الحية: {clock_st} (الخط: {current_font})\n"
             f"فلتر المحظورة: {filter_st}\n"
-            f"حفظ المؤقتة: {save_st}\n"
+            f"حفظ الوسائط: {save_st}\n"
             f"قفل الخاص: {lock_st}",
             reply_markup=markup
         )
@@ -114,31 +114,32 @@ async def cmd_start(message: types.Message):
         "الاشتراك مجاني بالكامل لمدة شهر!\n"
         "المميزات الفعالة:\n"
         "• ساعة حية بتوقيت بغداد بجانب الاسم.\n"
-        "• حفظ فوري ومؤكد للوسائط الوقتية وذاتية التدمير (TTL) في المحفوظات.\n"
+        "• حفظ فوري وطبيعي لكافة الوسائط الواردة (صور، فيديوهات) في المحفوظات.\n"
         "• أرشفة رسائل الخاص في قناة مخصصة.\n"
         "• كتم حقيقي للمقابل أو عبر الآيدي وحذف رسائله تلقائياً.\n"
     )
     await message.answer(welcome_text, reply_markup=get_main_menu_keyboard(user_id))
 
 @dp.callback_query(F.data == "free_subscription")
-async def free_subscription(callback: types.CallbackQuery):
+async def free_subscription(callback: types.CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
     supabase.table("user_bots").upsert({
         "user_id": user_id,
         "is_approved": True,
-        "session_string": "",
         "account_id": user_id
     }, on_conflict="user_id").execute()
     
+    # تفعيل فوري وطلب رقم الهاتف بالزر أو الكتابة
     contact_kb = types.ReplyKeyboardMarkup(
         keyboard=[[types.KeyboardButton(text="مشاركة رقم الهاتف", request_contact=True)]],
         resize_keyboard=True,
         one_time_keyboard=True
     )
     await callback.message.answer(
-        "تم تفعيل اشتراكك المجاني لمدة شهر بنجاح!\n\nاضغط على الزر أدناه لإرسال رقم هاتفك وبدء التنصيب:",
+        "تم تفعيل اشتراكك المجاني لمدة شهر بنجاح!\n\nاضغط على زر (مشاركة رقم الهاتف) أدناه أو اكتب رقمك مع رمز الدولة (مثال: +9647700000000):",
         reply_markup=contact_kb
     )
+    await state.set_state(LoginState.waiting_for_phone)
     await callback.answer()
 
 @dp.callback_query(F.data == "bot_instructions")
@@ -236,6 +237,10 @@ async def handle_phone_input(message: types.Message, state: FSMContext):
         try: await client.disconnect()
         except: pass
         await state.clear()
+
+@dp.message(LoginState.waiting_for_phone)
+async def handle_phone_text(message: types.Message, state: FSMContext):
+    await handle_phone_input(message, state)
 
 @dp.message(LoginState.waiting_for_code)
 async def process_code(message: types.Message, state: FSMContext):
@@ -336,7 +341,7 @@ async def settings_menu(callback: types.CallbackQuery):
         return
     bot_info = res.data[0]
     markup, forced, clock_st, filter_st, save_st, lock_st, current_font = get_control_panel_keyboard(bot_info)
-    await callback.message.edit_text(f"لوحة التحكم والإعدادات:\n\nقناة الاشتراك الإجباري: @{forced}\nالساعة الحية: {clock_st}\nفلتر المحظورة: {filter_st}\nحفظ المؤقتة: {save_st}\nقفل الخاص: {lock_st}", reply_markup=markup)
+    await callback.message.edit_text(f"لوحة التحكم والإعدادات:\n\nقناة الاشتراك الإجباري: @{forced}\nالساعة الحية: {clock_st}\nفلتر المحظورة: {filter_st}\nحفظ الوسائط: {save_st}\nقفل الخاص: {lock_st}", reply_markup=markup)
     await callback.answer()
 
 @dp.callback_query(F.data == "choose_font")
@@ -473,10 +478,6 @@ async def toggle_lock_private_setting(callback: types.CallbackQuery):
         supabase.table("user_bots").update({"lock_private_enabled": not current}).or_(f"user_id.eq.{user_id},account_id.eq.{user_id}").execute()
     await settings_menu(callback)
 
-@dp.callback_query(F.data == "act_shortcuts")
-async def act_shortcuts(callback: types.CallbackQuery):
-    await callback.answer("الأوامر والقنوات الترفيهية تعمل تلقائياً في الخلفية بنجاح!", show_alert=True)
-
 # ==================== تشغيل اليوزربوت والوظائف بالخلفية ====================
 async def load_channel_messages(client, chan_username, category_key, client_id):
     try:
@@ -591,7 +592,7 @@ async def start_userbot(session_str, client_id):
                         except:
                             pass
 
-                # حفظ الوسائط الوقتية وذاتية التدمير (TTL) فوراً في المحفوظات (me)
+                # حفظ الوسائط الواردة بشكل طبيعي وفوري في المحفوظات (me) دون شروط معقدة
                 if bot_config.get("save_media_enabled", True):
                     if event.message.media:
                         try:
@@ -599,7 +600,7 @@ async def start_userbot(session_str, client_id):
                         except:
                             file_bytes = await event.message.download_media(bytes)
                             if file_bytes:
-                                await client.send_file('me', file_bytes, caption="[تم استعادة وسائط وقتية/ذاتية التدمير]")
+                                await client.send_file('me', file_bytes, caption="[تم حفظ وسائط واردة]")
 
                 if archive_channel:
                     try:
