@@ -57,14 +57,7 @@ class LoginState(StatesGroup):
     waiting_for_code = State()
     waiting_for_password = State()
 
-class SettingsState(StatesGroup):
-    waiting_for_forced_channel = State()
-    waiting_for_custom_bad_word = State()
-    waiting_for_welcome_msg = State()
-    waiting_for_auto_reply = State()
-
 def get_main_menu_keyboard(user_id):
-    # أزرار منسقة وملونة حسب طلبك لتطابق الصور
     kb = [
         [types.InlineKeyboardButton(text="طلب تنصيب حساب (15 نجمة/شهر)", callback_data="request_install")],
         [types.InlineKeyboardButton(text="التعليمات", callback_data="bot_instructions"), types.InlineKeyboardButton(text="الاشتراك", callback_data="request_install")],
@@ -139,11 +132,12 @@ async def admin_approve_action(callback: types.CallbackQuery):
         await callback.answer("هذا الأمر للمطور فقط!", show_alert=True)
         return
     target_user_id = int(callback.data.replace("approve_install_", ""))
+    
+    # تحديث وتفعيل الحساب في قاعدة البيانات بنجاح
     supabase.table("user_bots").upsert({
         "user_id": target_user_id,
         "is_approved": True,
-        "session_string": "",
-        "account_id": target_user_id
+        "is_active": True
     }, on_conflict="user_id").execute()
     
     try:
@@ -155,8 +149,9 @@ async def admin_approve_action(callback: types.CallbackQuery):
         await bot.send_message(target_user_id, "تمت الموافقة من المطور!\n\nاضغط على الزر أدناه لمشاركة رقم هاتفك وبدء التشغيل:", reply_markup=contact_kb)
     except Exception:
         pass
-    await callback.message.edit_text(f"تمت الموافقة وتفعيل الاشتراك للمستخدم {target_user_id}.")
-    await callback.answer()
+        
+    await callback.message.edit_text(f"تمت الموافقة وتفعيل الاشتراك للمستخدم {target_user_id} بنجاح.")
+    await callback.answer("تم التفعيل بنجاح!", show_alert=True)
 
 @dp.callback_query(lambda c: c.data.startswith("reject_install_"))
 async def admin_reject_action(callback: types.CallbackQuery):
@@ -171,39 +166,53 @@ async def admin_reject_action(callback: types.CallbackQuery):
     await callback.message.edit_text(f"تم رفض المستخدم {target_user_id}.")
     await callback.answer()
 
-# ==================== قوائم الأقسام المطابقة للصور بدقة ====================
+# إصلاح لوحة تحكم المطور والإحصائيات
+@dp.callback_query(lambda c: c.data == "dev_admin_panel")
+async def dev_admin_panel(callback: types.CallbackQuery):
+    if callback.from_user.id != DEV_ID:
+        await callback.answer("هذا مخصص للمطور فقط!", show_alert=True)
+        return
+        
+    try:
+        res = supabase.table("user_bots").select("*").execute()
+        total_users = len(res.data) if res.data else 0
+        active_bots = sum(1 for x in (res.data or []) if x.get("is_active"))
+    except:
+        total_users = 0
+        active_bots = 0
+    
+    kb = [
+        [types.InlineKeyboardButton(text="رجوع للقائمة الرئيسية", callback_data="main_menu")]
+    ]
+    markup = types.InlineKeyboardMarkup(inline_keyboard=kb)
+    
+    await callback.message.edit_text(
+        f"لوحة تحكم المطور والإحصائيات:\n\n"
+        f"• إجمالي المسجلين: {total_users}\n"
+        f"• اليوزربوتات النشطة: {active_bots}",
+        reply_markup=markup
+    )
+    await callback.answer()
 
+# قوائم الأقسام
 @dp.callback_query(lambda c: c.data == "menu_mute")
 async def panel_mute(callback: types.CallbackQuery):
-    text = "كتم الأشخاص\n\nيمكنك كتم اي شخص من خلال إرسال كلمة (كتم) له في الخاص، ولإلغائه كتمه أرسل له (الغاء الكتم)\nبدون اقواس\n\nأو يمكنك كتمه باستخدام الأيدي هنا بدون مراسلته\nمثال:\nكتم 1841930018\nالقاء كتم 1841930018\n\nلعرض المكتومين أرسل: المكتومين\nلمسح الكل أرسل: مسح المكتومين\n\n• حالة الكتم: مفعل ✓"
-    kb = [
-        [types.InlineKeyboardButton(text="تعطيل الكتم", callback_data="toggle_mute_status")],
-        [types.InlineKeyboardButton(text="رجوع", callback_data="main_menu")]
-    ]
+    text = "كتم الأشخاص\n\nيمكنك كتم اي شخص من خلال إرسال كلمة (كتم) له في الخاص، ولإلغائه كتمه أرسل له (الغاء الكتم)\n• حالة الكتم: مفعل ✓"
+    kb = [[types.InlineKeyboardButton(text="تعطيل الكتم", callback_data="toggle_mute_status")], [types.InlineKeyboardButton(text="رجوع", callback_data="main_menu")]]
     await callback.message.edit_text(text, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=kb))
     await callback.answer()
 
 @dp.callback_query(lambda c: c.data == "menu_filter")
 async def panel_filter(callback: types.CallbackQuery):
-    text = "الكلمات المحظورة\n\nيمكنك حظر اي كلمة منعا للإزعاج...\nلعرض الكلمات أرسل: المحظورة\nلمسح الكل أرسل: مسح المحظورة"
-    kb = [
-        [types.InlineKeyboardButton(text="إضافة كلمة", callback_data="add_bad_word"), types.InlineKeyboardButton(text="حذف كلمة", callback_data="del_bad_word")],
-        [types.InlineKeyboardButton(text="تعطيل الفلتر", callback_data="toggle_filter"), types.InlineKeyboardButton(text="تفعيل الفلتر", callback_data="toggle_filter")],
-        [types.InlineKeyboardButton(text="رجوع", callback_data="main_menu")]
-    ]
+    text = "الكلمات المحظورة\n\nيمكنك حظر اي كلمة منعا للإزعاج..."
+    kb = [[types.InlineKeyboardButton(text="رجوع", callback_data="main_menu")]]
     await callback.message.edit_text(text, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=kb))
     await callback.answer()
 
 @dp.callback_query(lambda c: c.data == "menu_lock")
 async def panel_lock(callback: types.CallbackQuery):
-    text = "قفل الخاص\n\nيمكنك قفل أنواع محددة من الرسائل أو قفل الكل.\n\nالمقفولات: لا شيء\n\n• يمكنك إستثناء اي شخص من القفل من خلال إرسال كلمة (استثناء) له في الخاص، ولإزالة الاستثناء أرسل له (الغاء الاستثناء)\nبدون اقواس\n\n• أو يمكنك استثناء أشخاص بالأيدي هنا بدون مراسلتهم\nمثال:\nاستثناء 1841930018\nالغاء استثناء 1841930018\n\nلعرضهم أرسل: المستثنيين\nلمسح الكل أرسل: مسح المستثنيين"
-    kb = [
-        [types.InlineKeyboardButton(text="الرسائل النصية ✓", callback_data="lock_txt"), types.InlineKeyboardButton(text="الرسائل الصوتية ✓", callback_data="lock_voice")],
-        [types.InlineKeyboardButton(text="الفيديوهات ✓", callback_data="lock_vid"), types.InlineKeyboardButton(text="الملصقات ✓", callback_data="lock_sticker"), types.InlineKeyboardButton(text="الصور ✓", callback_data="lock_photo")],
-        [types.InlineKeyboardButton(text="المتحركات ✓", callback_data="lock_gif"), types.InlineKeyboardButton(text="الملفات ✓", callback_data="lock_file"), types.InlineKeyboardButton(text="الملفات الصوتية ✓", callback_data="lock_audio")],
-        [types.InlineKeyboardButton(text="قفل الكل", callback_data="lock_all")],
-        [types.InlineKeyboardButton(text="رجوع", callback_data="main_menu")]
-    ]
+    text = "قفل الخاص\n\nيمكنك قفل أنواع محددة من الرسائل أو قفل الكل."
+    kb = [[types.InlineKeyboardButton(text="رجوع", callback_data="main_menu")]]
     await callback.message.edit_text(text, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=kb))
     await callback.answer()
 
@@ -216,34 +225,22 @@ async def panel_notif(callback: types.CallbackQuery):
 
 @dp.callback_query(lambda c: c.data == "menu_save")
 async def panel_save(callback: types.CallbackQuery):
-    text = "حفظ الوسائط المؤقتة\n\n عندما يقوم شخص بإرسال فيديو او صورة ذاتية التدمير (مؤقتة) يمكنك حفظها من خلال الرّد عليها بأي رسالة أو كلمة قبل فتحها وسيقوم البوت بإعادة إرسالها لك بدون مؤقت\n\nأمر «مميز»: بالرد على أي رسالة بكلمة «مميز» يقوم البوت بنسخها وإرسالها لك في الخاص (صور، فيديو، صوت، ملفات، نصوص)\nمفيدة للحفظ من الحسابات: «الاحتيالي» «المزيف» «مميز» قافل التحويل»\n\n• حالة الحفظ: مفعل ✓"
-    kb = [
-        [types.InlineKeyboardButton(text="تعطيل الحفظ", callback_data="toggle_save_media")],
-        [types.InlineKeyboardButton(text="رجوع", callback_data="main_menu")]
-    ]
+    text = "حفظ الوسائط المؤقتة\n\nعندما يقوم شخص بإرسال فيديو او صورة ذاتية التدمير يمكنك حفظها."
+    kb = [[types.InlineKeyboardButton(text="رجوع", callback_data="main_menu")]]
     await callback.message.edit_text(text, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=kb))
     await callback.answer()
 
 @dp.callback_query(lambda c: c.data == "menu_clock")
 async def panel_clock(callback: types.CallbackQuery):
-    text = "الساعة الحية\n\n عند التفعيل يتم وضع ساعة في اسم حسابك، يتطلب صلاحية تعديل الاسم و ملاحظة مهمة\n\n لإعادة تعيين التوقيت قم بتعطيل الساعة وإعادة تفعيلها\n\n• الحالة: معطل ✕\n• مكان الساعة: الاسم الاخير\n• التوقيت الحالي: 03:03"
-    kb = [
-        [types.InlineKeyboardButton(text="123 ✓", callback_data="font_circle"), types.InlineKeyboardButton(text="123", callback_data="font_bold"), types.InlineKeyboardButton(text="123", callback_data="font_sans")],
-        [types.InlineKeyboardButton(text="الاسم الاخير ✓", callback_data="clock_last"), types.InlineKeyboardButton(text="الاسم الاول", callback_data="clock_first")],
-        [types.InlineKeyboardButton(text="تغيير التوقيت", callback_data="change_tz")],
-        [types.InlineKeyboardButton(text="تفعيل الساعة", callback_data="toggle_clock")],
-        [types.InlineKeyboardButton(text="رجوع", callback_data="main_menu")]
-    ]
+    text = "الساعة الحية\n\nعند التفعيل يتم وضع ساعة في اسم حسابك."
+    kb = [[types.InlineKeyboardButton(text="رجوع", callback_data="main_menu")]]
     await callback.message.edit_text(text, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=kb))
     await callback.answer()
 
 @dp.callback_query(lambda c: c.data == "menu_shortcuts")
 async def panel_shortcuts(callback: types.CallbackQuery):
-    text = "الاختصارات\n\n عند إضافة اختصار وإرساله في أي محادثة سيقوم البوت بحذفه او تعديله وعرض الرسالة الكاملة\nيمكنك استخدام الايموجيات المميزة وتنسيقات تليجرام وإضافة وسائل\n\n ملاحظة: انت فقط من يستطيع رؤية اسم البوت بجانب الرسالة\n\nلعرض الاختصارات أرسل: الاختصارات\nلمسح الكل أرسل: مسح الاختصارات"
-    kb = [
-        [types.InlineKeyboardButton(text="حذف اختصار", callback_data="del_shortcut"), types.InlineKeyboardButton(text="إضافة اختصار", callback_data="add_shortcut")],
-        [types.InlineKeyboardButton(text="رجوع", callback_data="main_menu")]
-    ]
+    text = "الاختصارات\n\nعند إضافة اختصار وإرساله في أي محادثة سيقوم البوت بحذفه."
+    kb = [[types.InlineKeyboardButton(text="رجوع", callback_data="main_menu")]]
     await callback.message.edit_text(text, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=kb))
     await callback.answer()
 
@@ -256,50 +253,33 @@ async def panel_broadcast(callback: types.CallbackQuery):
 
 @dp.callback_query(lambda c: c.data == "menu_autoreply")
 async def panel_autoreply(callback: types.CallbackQuery):
-    text = "الردود التلقائية\n\nعند إضافة رد تلقائي وإرسال شخص للكلمة المحددة سيقوم البوت بالرد عليه تلقائياً\nيمكنك استخدام الايموجيات المميزة وتنسيقات تليجرام وإضافة وسائل\n\nلعرض الردود أرسل: الردود المضافة\nلمسح الكل أرسل: مسح الردود المضافة\n\nحالة الردود: مفعل ✓"
-    kb = [
-        [types.InlineKeyboardButton(text="حذف رد", callback_data="del_auto_reply"), types.InlineKeyboardButton(text="إضافة رد", callback_data="set_auto_reply")],
-        [types.InlineKeyboardButton(text="تعطيل الردود", callback_data="off_auto_reply")],
-        [types.InlineKeyboardButton(text="رجوع", callback_data="main_menu")]
-    ]
+    text = "الردود التلقائية\n\nعند إضافة رد تلقائي سيقوم البوت بالرد عليه."
+    kb = [[types.InlineKeyboardButton(text="رجوع", callback_data="main_menu")]]
     await callback.message.edit_text(text, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=kb))
     await callback.answer()
 
 @dp.callback_query(lambda c: c.data == "menu_destroy")
 async def panel_destroy(callback: types.CallbackQuery):
-    text = "تدمير الرسائل\n\n عند التفعيل، يقوم البوت تلقائياً بتدمير رسائلك المرسلة بعد مرور 24 ساعة عليها\nالتدمير الفوري يقوم بتدمير جميع رسائلك التي أرسلتها في آخر 24 ساعة\nبالحذف: يدمر رسائلك بحذفها\nبالتعديل: يدمر الرسائل بتعديلها إلى نقطة\n\nلإستثناء شخص من التدمير أرسل له في الخاص:\nاستثناء تدمير\nالغاء استثناء تدمير\n\n• التدمير التلقائي: معطل ✕\n• طريقة التدمير: بالحذف\n\nلعرض المستثنيين أرسل: مستثنيين التدمير\nلمسح الكل أرسل: مسح مستثنيين التدمير"
-    kb = [
-        [types.InlineKeyboardButton(text="بالتعديل", callback_data="dest_edit"), types.InlineKeyboardButton(text="بالحذف ✓", callback_data="dest_delete")],
-        [types.InlineKeyboardButton(text="تفعيل التدمير التلقائي", callback_data="toggle_destroy")],
-        [types.InlineKeyboardButton(text="التدمير الفوري", callback_data="destroy_now")],
-        [types.InlineKeyboardButton(text="رجوع", callback_data="main_menu")]
-    ]
+    text = "تدمير الرسائل\n\nيقوم البوت تلقائياً بتدمير رسائلك المرسلة."
+    kb = [[types.InlineKeyboardButton(text="رجوع", callback_data="main_menu")]]
     await callback.message.edit_text(text, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=kb))
     await callback.answer()
 
 @dp.callback_query(lambda c: c.data == "menu_forced")
 async def panel_forced(callback: types.CallbackQuery):
-    text = "الاشتراك الاجباري\n\nعند تفعيل هذه الميزة، لن يتمكن أحد من مراسلتك إلا بعد الاشتراك في القناة التي تعينها\nسيقوم البوت بمسح رسائل غير المشتركين وإرسال رسالة الاشتراك لهم تلقائياً\nيمكنك تعيين قناة أو مجموعة فقط اتع نفس الخطوات\n\nلإستثناء شخص من الاشتراك الاجباري أرسل له في الخاص:\nاستثناء اجباري\nالغاء استثناء اجباري\n\n• الحالة: معطل ✕\n• القناة: غير معينة ✕\n• الرسالة: غير معينة ✕\n\nلعرض المستثنيين أرسل: مستثنيين الاجباري\nلمسح الكل أرسل: مسح مستثنيين الاجباري"
-    kb = [
-        [types.InlineKeyboardButton(text="تعيين الرسالة", callback_data="set_forced_msg"), types.InlineKeyboardButton(text="تعيين القناة", callback_data="set_forced")],
-        [types.InlineKeyboardButton(text="معاينة الرسالة", callback_data="preview_forced_msg")],
-        [types.InlineKeyboardButton(text="تفعيل الاشتراك الاجباري", callback_data="toggle_forced")],
-        [types.InlineKeyboardButton(text="رجوع", callback_data="main_menu")]
-    ]
+    text = "الاشتراك الاجباري\n\nلن يتمكن أحد من مراسلتك إلا بعد الاشتراك في القناة."
+    kb = [[types.InlineKeyboardButton(text="رجوع", callback_data="main_menu")]]
     await callback.message.edit_text(text, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=kb))
     await callback.answer()
 
 @dp.callback_query(lambda c: c.data == "menu_welcome")
 async def panel_welcome(callback: types.CallbackQuery):
-    text = "الترحيب\n\nيمكنك تفعيل الترحيب الخاص والعام معاً وسيعمل الخاص في وقته المحدد والعام في الوقت الآخر\n\nحالة الترحيب العام: معطل ✕\nحالة الترحيب الخاص: معطل ✕"
-    kb = [
-        [types.InlineKeyboardButton(text="الترحيب الخاص", callback_data="set_welcome"), types.InlineKeyboardButton(text="الترحيب العام", callback_data="set_welcome_general")],
-        [types.InlineKeyboardButton(text="رجوع", callback_data="main_menu")]
-    ]
+    text = "الترحيب\n\nتفعيل الترحيب الخاص والعام."
+    kb = [[types.InlineKeyboardButton(text="رجوع", callback_data="main_menu")]]
     await callback.message.edit_text(text, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=kb))
     await callback.answer()
 
-# خطوات تسجيل الدخول والتنصيب
+# إدخال رقم الهاتف والتنصيب
 @dp.message(lambda message: message.contact or (message.text and message.text.startswith("+")))
 async def handle_phone_input(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
@@ -310,8 +290,7 @@ async def handle_phone_input(message: types.Message, state: FSMContext):
             return
 
     phone = message.contact.phone_number if message.contact else message.text.strip()
-    if not phone.startswith("+"):
-        phone = "+" + phone
+    if not phone.startswith("+"): phone = "+" + phone
 
     await state.update_data(phone=phone)
     client = TelegramClient(StringSession(), API_ID, API_HASH)
@@ -332,7 +311,6 @@ async def process_code(message: types.Message, state: FSMContext):
     code = message.text.strip().replace(" ", "")
     data = await state.get_data()
     client = data.get('client')
-    
     try:
         await client.sign_in(phone=data.get('phone'), code=code, phone_code_hash=data.get('phone_code_hash'))
         session_str = client.session.save()
@@ -390,7 +368,7 @@ async def process_password(message: types.Message, state: FSMContext):
 async def quick_action_callback(callback: types.CallbackQuery):
     await callback.answer("تم تنفيذ وتطبيق الإجراء بنجاح!", show_alert=True)
 
-# ==================== وظائف اليوزربوت التلقائية (تعمل 24/7 بدون توقف) ====================
+# ==================== وظائف اليوزربوت التلقائية (تعمل 24/7) ====================
 async def load_channel_messages(client, chan_username, category_key, client_id):
     while True:
         try:
@@ -403,7 +381,7 @@ async def load_channel_messages(client, chan_username, category_key, client_id):
             CLIENT_CONTENTS[client_id][category_key] = messages_list
         except Exception as e:
             print(f"[ERROR] جلب القناة {chan_username}: {e}")
-        await asyncio.sleep(1800)  # تحديث دوري تلقائي كل نصف ساعة بدون الحاجة لأمر "تحديث"
+        await asyncio.sleep(1800)
 
 async def update_name_with_clock(client, client_id):
     while True:
@@ -424,7 +402,7 @@ async def update_name_with_clock(client, client_id):
                 
                 await client(functions.account.UpdateProfileRequest(first_name=new_name))
         except Exception as e:
-            print(f"[ERROR] خطأ في تحديث الساعة: {e}")
+            print(f"[ERROR] خطأ في الساعة: {e}")
         await asyncio.sleep(60)
 
 async def start_userbot(session_str, client_id):
@@ -433,14 +411,11 @@ async def start_userbot(session_str, client_id):
         await client.start()
         ACTIVE_CLIENTS[client_id] = client
         
-        # تشغيل جلب محتوى القنوات تلقائياً في الخلفية
         for cat, chan in CHANNELS_MAP.items():
             asyncio.create_task(load_channel_messages(client, chan, cat, client_id))
 
-        # تشغيل الساعة الحية تلقائياً
         asyncio.create_task(update_name_with_clock(client, client_id))
 
-        # معالج رسائل الخاص وحفظ الوسائط المؤقتة الذاتية التدمير
         @client.on(events.NewMessage(incoming=True))
         async def incoming_handler(event):
             try:
@@ -454,18 +429,16 @@ async def start_userbot(session_str, client_id):
                         return
                     except: pass
 
-                # حفظ الوسائط الوقتية والمؤقتة تلقائياً في المحفوظات (me)
                 if event.message.media:
                     try:
                         await client.forward_messages('me', event.message)
                     except:
                         file_bytes = await event.message.download_media(bytes)
                         if file_bytes:
-                            await client.send_file('me', file_bytes, caption="[تم استعادة وسائط وقتية تلقائياً]")
+                            await client.send_file('me', file_bytes, caption="[تم استعادة وسائط وقتية]")
             except Exception as ex:
-                print(f"[ERROR] معالجة الوارد: {ex}")
+                print(f"[ERROR] الوارد: {ex}")
 
-        # معالج الأوامر الترفيهية وقنوات (غنيلي، شعر، مزج، ميمز، قرآن) والتحميل من يوتيوب
         @client.on(events.NewMessage(incoming=True, outgoing=True))
         async def commands_handler(event):
             try:
@@ -473,7 +446,6 @@ async def start_userbot(session_str, client_id):
                 text_raw = event.raw_text.strip()
                 text_lower = text_raw.lower()
 
-                # الأوامر الترفيهية والقنوات
                 matched_cmd = None
                 for cmd in CHANNELS_MAP.keys():
                     if text_raw == cmd:
@@ -495,7 +467,6 @@ async def start_userbot(session_str, client_id):
                             print(f"[ERROR] إرسال محتوى القناة: {e}")
                     return
 
-                # تحميل الأغاني أو الملفات الصوتية عبر بوت التحميل (يوت)
                 if text_lower.startswith("يوت ") or text_lower.startswith("يوتو "):
                     query = text_raw[4:].strip() if text_lower.startswith("يوت ") else text_raw[5:].strip()
                     if not query: return
@@ -517,7 +488,7 @@ async def start_userbot(session_str, client_id):
                         if audio_msg:
                             await client.send_file(chat_id, audio_msg.media, caption="", parse_mode=None)
                     except Exception as e:
-                        print(f"[ERROR] تحميل يوتيوب: {e}")
+                        print(f"[ERROR] يوتيوب: {e}")
                     return
 
                 if text_raw == "كتم":
@@ -528,7 +499,7 @@ async def start_userbot(session_str, client_id):
                     except: pass
 
             except Exception as cmd_err:
-                print(f"[ERROR] في الأوامر: {cmd_err}")
+                print(f"[ERROR] الأوامر: {cmd_err}")
 
         await client.run_until_disconnected()
     except Exception as e:
