@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AutoPro Bot</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            background: linear-gradient(135deg, #0f0c29, #302b63, #24243e);
+            font-family: 'Segoe UI', Tahoma, Arial, sans-serif;
+            min-height: 100vh;
+            padding: 15px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        
+        .container {
+            width: 100%;
+            max-width: 420px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 20px;
+            padding: 20px;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 20px;
+            color: white;
+        }
+        
+        .header h2 {
+            font-size: 26px;
+            margin-bottom: 5px;
+            background: linear-gradient(135deg, #667eea, #764ba2, #f0932b);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        
+        .header p {
+            font-size: 14px;
+            color: #aaa;
+        }
+        
+        .btn {
+            display: block;
+            width: 100%;
+            padding: 15px 20px;
+            margin: 8px 0;
+            border: none;
+            border-radius: 12px;
+            font-size: 15px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-align: center;
+            color: white;
+            position: relative;
+            overflow: hidden;
+            letter-spacing: 0.5px;
+        }
+        
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+        }
+        
+        .btn:active {
+            transform: translateY(0);
+            box-shadow: none;
+        }
+        
+        .btn-blue { background: linear-gradient(135deg, #667eea, #764ba2); }
+        .btn-green { background: linear-gradient(135deg, #00b894, #00cec9); }
+        .btn-red { background: linear-gradient(135deg, #e17055, #d63031); }
+        .btn-purple { background: linear-gradient(135deg, #6c5ce7, #a29bfe); }
+        .btn-orange { background: linear-gradient(135deg, #fdcb6e, #e17055); color: #333; }
+        .btn-cyan { background: linear-gradient(135deg, #00cec9, #0984e3); }
+        .btn-pink { background: linear-gradient(135deg, #fd79a8, #e84393); }
+        .btn-dark { background: linear-gradient(135deg, #2d3436, #636e72); }
+        .btn-gold { background: linear-gradient(135deg, #f9ca24, #f0932b); color: #333; }
+        .btn-teal { background: linear-gradient(135deg, #1abc9c, #16a085); }
+        .btn-navy { background: linear-gradient(135deg, #2c3e50, #3498db); }
+        .btn-maroon { background: linear-gradient(135deg, #c0392b, #e74c3c); }
+        
+        .row {
+            display: flex;
+            gap: 10px;
+        }
+        
+        .row .btn {
+            flex: 1;
+        }
+        
+        .divider {
+            height: 1px;
+            background: rgba(255,255,255,0.1);
+            margin: 15px 0;
+        }
+        
+        .section-title {
+            color: #aaa;
+            font-size: 13px;
+            margin: 10px 0;
+            text-align: center;
+            letter-spacing: 2px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h2>AutoPro Bot</h2>
+            <p>لوحة التحكم الرئيسية</p>
+        </div>
+        
+        <div class="section-title">── الحساب ──</div>
+        <button class="btn btn-blue" onclick="sendData('subscription')">🚀 تفعيل الاشتراك</button>
+        <button class="btn btn-green" onclick="sendData('settings')">⚙️ لوحة التحكم</button>
+        
+        <div class="section-title">── المساعدة ──</div>
+        <button class="btn btn-cyan" onclick="sendData('instructions')">📚 التعليمات</button>
+        <button class="btn btn-purple" onclick="sendData('contact')">👨‍💻 مراسلة المطور</button>
+        
+        <div class="section-title">── المطور ──</div>
+        <button class="btn btn-gold" onclick="sendData('dev_panel')">🛠 لوحة المطور</button>
+        
+        <div class="divider"></div>
+        
+        <div class="section-title">── إدارة سريعة ──</div>
+        <div class="row">
+            <button class="btn btn-red" onclick="sendData('mute_menu')">🔇 كتم</button>
+            <button class="btn btn-orange" onclick="sendData('ban_menu')">🚫 حظر</button>
+        </div>
+        <div class="row">
+            <button class="btn btn-pink" onclick="sendData('destroy')">🗑 تدمير</button>
+            <button class="btn btn-teal" onclick="sendData('publish')">📢 نشر</button>
+        </div>
+        <div class="row">
+            <button class="btn btn-navy" onclick="sendData('subs')">💳 اشتراكات</button>
+            <button class="btn btn-maroon" onclick="sendData('blocked')">🚫 محظورين</button>
+        </div>
+    </div>
+    
+    <script>
+        let tg = window.Telegram.WebApp;
+        tg.expand();
+        tg.ready();
+        
+        function sendData(data) {
+            tg.sendData(data);
+        }
+    </script>
+</body>
+</html>
