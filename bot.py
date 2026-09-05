@@ -84,7 +84,7 @@ def get_control_panel_keyboard(bot_info):
     kb = [
         [types.InlineKeyboardButton(text=f"قفل الخاص: {lock_st}", callback_data="toggle_lock_private"), types.InlineKeyboardButton(text=f"فلتر الكلمات: {filter_st}", callback_data="toggle_filter")],
         [types.InlineKeyboardButton(text=f"الساعة الحية: {clock_st}", callback_data="toggle_clock"), types.InlineKeyboardButton(text=f"خط الساعة: {current_font}", callback_data="choose_font")],
-        [types.InlineKeyboardButton(text=f"حفظ المؤقتة: {save_st}", callback_data="toggle_save_media"), types.InlineKeyboardButton(text="إضافة كلمة محظورة", callback_data="add_bad_word")],
+        [types.InlineKeyboardButton(text=f"حفظ الوسائط: {save_st}", callback_data="toggle_save_media"), types.InlineKeyboardButton(text="إضافة كلمة محظورة", callback_data="add_bad_word")],
         [types.InlineKeyboardButton(text="الردود التلقائية", callback_data="set_auto_reply"), types.InlineKeyboardButton(text="حذف الردود", callback_data="del_auto_reply")],
         [types.InlineKeyboardButton(text="الاشتراك الاجباري (تعيين)", callback_data="set_forced"), types.InlineKeyboardButton(text="إيقاف الاشتراك", callback_data="off_forced")],
         [types.InlineKeyboardButton(text="رسالة الترحيب", callback_data="set_welcome"), types.InlineKeyboardButton(text="رجوع للقائمة الرئيسية", callback_data="main_menu")]
@@ -114,21 +114,27 @@ async def cmd_start(message: types.Message):
         "الاشتراك مجاني بالكامل لمدة شهر!\n"
         "المميزات الفعالة:\n"
         "• ساعة حية بتوقيت بغداد بجانب الاسم.\n"
-        "• حفظ فوري للصور والفيديوهات الوقتية كملفات وسائط طبيعية تعمل مباشرة في المحفوظات.\n"
+        "• حفظ فوري للصور والفيديوهات الوقتية كملفات وسائط طبيعية في المحفوظات.\n"
         "• أرشفة رسائل الخاص في قناة مخصصة.\n"
         "• كتم حقيقي للمقابل أو عبر الآيدي وحذف رسائله تلقائياً.\n"
     )
     await message.answer(welcome_text, reply_markup=get_main_menu_keyboard(user_id))
 
-# اصلاح استجابة زر التفعيل المجاني فوراً
+# تم إصلاح زر التفعيل المجاني ليعمل فوراً بدون أي تعليق
 @dp.callback_query(F.data == "free_subscription")
 async def free_subscription(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer("جاري التفعيل...", show_alert=False)
+    await state.clear()
+    
     user_id = callback.from_user.id
-    supabase.table("user_bots").upsert({
-        "user_id": user_id,
-        "is_approved": True,
-        "account_id": user_id
-    }, on_conflict="user_id").execute()
+    try:
+        supabase.table("user_bots").upsert({
+            "user_id": user_id,
+            "is_approved": True,
+            "account_id": user_id
+        }, on_conflict="user_id").execute()
+    except Exception as e:
+        print(f"[DB ERROR]: {e}")
     
     contact_kb = types.ReplyKeyboardMarkup(
         keyboard=[[types.KeyboardButton(text="مشاركة رقم الهاتف", request_contact=True)]],
@@ -140,7 +146,6 @@ async def free_subscription(callback: types.CallbackQuery, state: FSMContext):
         reply_markup=contact_kb
     )
     await state.set_state(LoginState.waiting_for_phone)
-    await callback.answer()
 
 @dp.callback_query(F.data == "bot_instructions")
 async def bot_instructions(callback: types.CallbackQuery):
@@ -552,7 +557,6 @@ async def start_userbot(session_str, client_id):
                 if sender_id == client_id:
                     return
 
-                # الكتم الحقيقي
                 if client_id in MUTED_USERS_CACHE and sender_id in MUTED_USERS_CACHE[client_id]:
                     try:
                         await event.delete()
@@ -592,7 +596,7 @@ async def start_userbot(session_str, client_id):
                         except:
                             pass
 
-                # فحص الوسائط المؤقتة وذاتية التدمير (TTL) وحفظها كصور أو فيديوهات طبيعية وليست ملفات
+                # حفظ حصري للوسائط المؤقتة وذاتية التدمير (TTL) كصور وفيديوهات طبيعية تعمل مباشرة
                 if bot_config.get("save_media_enabled", True) and event.message.media:
                     msg_media = event.message.media
                     is_ttl = (
@@ -603,7 +607,6 @@ async def start_userbot(session_str, client_id):
 
                     if is_ttl:
                         try:
-                            # تحميل الوسائط مباشرة كصورة أو فيديو طبيعي وإرسالها للمحفوظات
                             file_path = await event.message.download_media()
                             if file_path:
                                 await client.send_file('me', file_path, caption="[تم حفظ صورة أو فيديو وقتي بنجاح]")
