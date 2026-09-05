@@ -125,7 +125,7 @@ async def request_install(callback: types.CallbackQuery):
         await callback.message.answer("حدث خطأ أثناء إرسال الطلب للمطور.")
     await callback.answer()
 
-# === معالج زر الموافقة والتفعيل (مفصول ومباشر لضمان العمل الفوري) ===
+# === معالج زر الموافقة والتفعيل (محدد بدقة تامة ليعمل فوراً بدون تداخل) ===
 @dp.callback_query(lambda c: c.data and c.data.startswith("approve_install_"))
 async def admin_approve_action(callback: types.CallbackQuery):
     if callback.from_user.id != DEV_ID:
@@ -135,10 +135,10 @@ async def admin_approve_action(callback: types.CallbackQuery):
     try:
         target_user_id = int(callback.data.replace("approve_install_", ""))
     except ValueError:
-        await callback.answer("حدث خطأ في قراءة الأيدي.", show_alert=True)
+        await callback.answer("خطأ في قراءة الأيدي.", show_alert=True)
         return
     
-    # تحديث وتفعيل الحساب بقاعدة البيانات
+    # تحديث وتفعيل الحساب في قاعدة البيانات
     supabase.table("user_bots").upsert({
         "user_id": target_user_id,
         "is_approved": True,
@@ -157,10 +157,10 @@ async def admin_approve_action(callback: types.CallbackQuery):
             reply_markup=contact_kb
         )
     except Exception as e:
-        print(f"[ERROR] إرسال زر مشاركة الرقم للمستخدم: {e}")
+        print(f"[ERROR] إرسال زر مشاركة الرقم: {e}")
         
     await callback.message.edit_text(f"تمت الموافقة وتفعيل الاشتراك للمستخدم {target_user_id} بنجاح.")
-    await callback.answer("تم التفعيل وإرسال زر مشاركة الهاتف للمستخدم!", show_alert=True)
+    await callback.answer("تم تفعيل المستخدم بنجاح وإرسال زر مشاركة الرقم له!", show_alert=True)
 
 # === معالج زر الرفض ===
 @dp.callback_query(lambda c: c.data and c.data.startswith("reject_install_"))
@@ -208,7 +208,7 @@ async def dev_admin_panel(callback: types.CallbackQuery):
     )
     await callback.answer()
 
-# أقسام التحكم بالأزرار الشفافة
+# أقسام التحكم
 @dp.callback_query(lambda c: c.data == "menu_mute")
 async def panel_mute(callback: types.CallbackQuery):
     text = "كتم الأشخاص\n\nيمكنك كتم اي شخص من خلال إرسال كلمة (كتم) له في الخاص.\n• حالة الكتم: مفعل"
@@ -323,8 +323,8 @@ async def panel_welcome(callback: types.CallbackQuery):
     await callback.message.edit_text(text, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=kb))
     await callback.answer()
 
-# معالج عام لباقي الأزرار البسيطة
-@dp.callback_query(lambda c: c.data and c.data.startswith(("toggle_", "l_", "dest_", "font_", "clock_", "off_", "add_", "del_", "change_", "destroy_", "preview_", "set_", "wel_")))
+# معالج عام للأزرار الأخرى مع استثناء أزرار التنصيب والموافقة لعدم التداخل
+@dp.callback_query(lambda c: c.data and not c.data.startswith(("approve_install_", "reject_install_", "request_install")) )
 async def quick_action_callback(callback: types.CallbackQuery):
     await callback.answer("تم تنفيذ وتطبيق الإجراء بنجاح!", show_alert=True)
 
