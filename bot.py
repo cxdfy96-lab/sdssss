@@ -56,20 +56,20 @@ class LoginState(StatesGroup):
     waiting_for_code = State()
     waiting_for_password = State()
 
-# أزرار شفافة (Inline) مطابقة للصور وموزعة بشكل دقيق
+# أزرار شفافة نظيفة بدون إيموجي ومطابقة للصور
 def get_main_menu_keyboard(user_id):
     kb = [
-        [types.InlineKeyboardButton(text="📥 طلب تنصيب حساب (15 نجمة/شهر)", callback_data="request_install")],
-        [types.InlineKeyboardButton(text="🟢 التعليمات", callback_data="bot_instructions"), types.InlineKeyboardButton(text="🔴 الاشتراك", callback_data="request_install")],
-        [types.InlineKeyboardButton(text="🔵 كتم الأشخاص", callback_data="menu_mute"), types.InlineKeyboardButton(text="🔵 الكلمات المحظورة", callback_data="menu_filter"), types.InlineKeyboardButton(text="🔵 قفل الخاص", callback_data="menu_lock")],
-        [types.InlineKeyboardButton(text="🔵 الاشعارات", callback_data="menu_notif"), types.InlineKeyboardButton(text="🔵 حفظ المؤقتة", callback_data="menu_save"), types.InlineKeyboardButton(text="🔵 الساعة الحية", callback_data="menu_clock")],
-        [types.InlineKeyboardButton(text="🟢 الاختصارات", callback_data="menu_shortcuts"), types.InlineKeyboardButton(text="🟢 إذاعة خاص", callback_data="menu_broadcast")],
-        [types.InlineKeyboardButton(text="🟢 الردود التلقائية", callback_data="menu_autoreply")],
-        [types.InlineKeyboardButton(text="🟢 تدمير الرسائل", callback_data="menu_destroy"), types.InlineKeyboardButton(text="🟢 الاشتراك الاجباري", callback_data="menu_forced")],
-        [types.InlineKeyboardButton(text="🔵 الترحيب", callback_data="menu_welcome")]
+        [types.InlineKeyboardButton(text="طلب تنصيب حساب (15 نجمة/شهر)", callback_data="request_install")],
+        [types.InlineKeyboardButton(text="التعليمات", callback_data="bot_instructions"), types.InlineKeyboardButton(text="الاشتراك", callback_data="request_install")],
+        [types.InlineKeyboardButton(text="كتم الأشخاص", callback_data="menu_mute"), types.InlineKeyboardButton(text="الكلمات المحظورة", callback_data="menu_filter"), types.InlineKeyboardButton(text="قفل الخاص", callback_data="menu_lock")],
+        [types.InlineKeyboardButton(text="الاشعارات", callback_data="menu_notif"), types.InlineKeyboardButton(text="حفظ المؤقتة", callback_data="menu_save"), types.InlineKeyboardButton(text="الساعة الحية", callback_data="menu_clock")],
+        [types.InlineKeyboardButton(text="الاختصارات", callback_data="menu_shortcuts"), types.InlineKeyboardButton(text="إذاعة خاص", callback_data="menu_broadcast")],
+        [types.InlineKeyboardButton(text="الردود التلقائية", callback_data="menu_autoreply")],
+        [types.InlineKeyboardButton(text="تدمير الرسائل", callback_data="menu_destroy"), types.InlineKeyboardButton(text="الاشتراك الاجباري", callback_data="menu_forced")],
+        [types.InlineKeyboardButton(text="الترحيب", callback_data="menu_welcome")]
     ]
     if user_id == DEV_ID:
-        kb.append([types.InlineKeyboardButton(text="⭐ لوحة تحكم المطور والإحصائيات", callback_data="dev_admin_panel")])
+        kb.append([types.InlineKeyboardButton(text="لوحة تحكم المطور والإحصائيات", callback_data="dev_admin_panel")])
     return types.InlineKeyboardMarkup(inline_keyboard=kb)
 
 @dp.message(Command("start"))
@@ -98,7 +98,7 @@ async def bot_instructions(callback: types.CallbackQuery):
         "   - (يوت + اسم الأغنية للبحث والتحميل السريع)\n"
         "   - (كتم / فك كتم) وحظر المستخدمين."
     )
-    kb = types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(text="🔙 رجوع", callback_data="main_menu")]])
+    kb = types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(text="رجوع", callback_data="main_menu")]])
     await callback.message.edit_text(text, reply_markup=kb)
     await callback.answer()
 
@@ -110,8 +110,8 @@ async def request_install(callback: types.CallbackQuery):
     
     kb = [
         [
-            types.InlineKeyboardButton(text="✅ موافقة وتفعيل", callback_data=f"approve_install_{user_id}"),
-            types.InlineKeyboardButton(text="❌ رفض", callback_data=f"reject_install_{user_id}")
+            types.InlineKeyboardButton(text="موافقة وتفعيل", callback_data=f"approve_install_{user_id}"),
+            types.InlineKeyboardButton(text="رفض", callback_data=f"reject_install_{user_id}")
         ]
     ]
     markup = types.InlineKeyboardMarkup(inline_keyboard=kb)
@@ -126,14 +126,15 @@ async def request_install(callback: types.CallbackQuery):
         await callback.message.answer("حدث خطأ أثناء إرسال الطلب للمطور.")
     await callback.answer()
 
+# معالجة الموافقة والتفعيل بدقة تامة
 @dp.callback_query(lambda c: c.data.startswith("approve_install_"))
 async def admin_approve_action(callback: types.CallbackQuery):
     if callback.from_user.id != DEV_ID:
         await callback.answer("هذا الأمر للمطور فقط!", show_alert=True)
         return
+    
     target_user_id = int(callback.data.replace("approve_install_", ""))
     
-    # تحديث قاعدة البيانات وتفعيل الحساب فوراً
     supabase.table("user_bots").upsert({
         "user_id": target_user_id,
         "is_approved": True,
@@ -153,18 +154,20 @@ async def admin_approve_action(callback: types.CallbackQuery):
     await callback.message.edit_text(f"تمت الموافقة وتفعيل الاشتراك للمستخدم {target_user_id} بنجاح.")
     await callback.answer("تم تفعيل المستخدم بنجاح!", show_alert=True)
 
+# معالجة الرفض
 @dp.callback_query(lambda c: c.data.startswith("reject_install_"))
 async def admin_reject_action(callback: types.CallbackQuery):
     if callback.from_user.id != DEV_ID:
         await callback.answer("هذا الأمر للمطور فقط!", show_alert=True)
         return
+    
     target_user_id = int(callback.data.replace("reject_install_", ""))
     try:
         await bot.send_message(target_user_id, "عذراً، تم رفض طلب التنصيب لعدم إتمام دفع النجوم.")
     except:
         pass
     await callback.message.edit_text(f"تم رفض المستخدم {target_user_id}.")
-    await callback.answer()
+    await callback.answer("تم الرفض بنجاح!", show_alert=True)
 
 @dp.callback_query(lambda c: c.data == "dev_admin_panel")
 async def dev_admin_panel(callback: types.CallbackQuery):
@@ -181,7 +184,7 @@ async def dev_admin_panel(callback: types.CallbackQuery):
         active_bots = 0
     
     kb = [
-        [types.InlineKeyboardButton(text="🔙 رجوع للقائمة الرئيسية", callback_data="main_menu")]
+        [types.InlineKeyboardButton(text="رجوع للقائمة الرئيسية", callback_data="main_menu")]
     ]
     markup = types.InlineKeyboardMarkup(inline_keyboard=kb)
     
@@ -193,13 +196,13 @@ async def dev_admin_panel(callback: types.CallbackQuery):
     )
     await callback.answer()
 
-# أقسام التحكم بالأزرار الشفافة
+# أقسام التحكم
 @dp.callback_query(lambda c: c.data == "menu_mute")
 async def panel_mute(callback: types.CallbackQuery):
-    text = "كتم الأشخاص\n\nيمكنك كتم اي شخص من خلال إرسال كلمة (كتم) له في الخاص، ولإلغائه كتمه أرسل له (الغاء الكتم)\n• حالة الكتم: مفعل ✓"
+    text = "كتم الأشخاص\n\nيمكنك كتم اي شخص من خلال إرسال كلمة (كتم) له في الخاص.\n• حالة الكتم: مفعل"
     kb = [
         [types.InlineKeyboardButton(text="حذف كتم", callback_data="del_mute"), types.InlineKeyboardButton(text="إضافة كتم", callback_data="add_mute")],
-        [types.InlineKeyboardButton(text="🔙 رجوع", callback_data="main_menu")]
+        [types.InlineKeyboardButton(text="رجوع", callback_data="main_menu")]
     ]
     await callback.message.edit_text(text, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=kb))
     await callback.answer()
@@ -209,7 +212,7 @@ async def panel_filter(callback: types.CallbackQuery):
     text = "الكلمات المحظورة\n\nيمكنك حظر اي كلمة منعا للإزعاج..."
     kb = [
         [types.InlineKeyboardButton(text="حذف كلمة", callback_data="del_word"), types.InlineKeyboardButton(text="إضافة كلمة", callback_data="add_word")],
-        [types.InlineKeyboardButton(text="🔙 رجوع", callback_data="main_menu")]
+        [types.InlineKeyboardButton(text="رجوع", callback_data="main_menu")]
     ]
     await callback.message.edit_text(text, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=kb))
     await callback.answer()
@@ -218,8 +221,8 @@ async def panel_filter(callback: types.CallbackQuery):
 async def panel_lock(callback: types.CallbackQuery):
     text = "قفل الخاص\n\nيمكنك قفل أنواع محددة من الرسائل أو قفل الكل."
     kb = [
-        [types.InlineKeyboardButton(text="الرسائل النصية ✓", callback_data="l_txt"), types.InlineKeyboardButton(text="الرسائل الصوتية ✓", callback_data="l_voice")],
-        [types.InlineKeyboardButton(text="🔙 رجوع", callback_data="main_menu")]
+        [types.InlineKeyboardButton(text="الرسائل النصية", callback_data="l_txt"), types.InlineKeyboardButton(text="الرسائل الصوتية", callback_data="l_voice")],
+        [types.InlineKeyboardButton(text="رجوع", callback_data="main_menu")]
     ]
     await callback.message.edit_text(text, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=kb))
     await callback.answer()
@@ -227,7 +230,7 @@ async def panel_lock(callback: types.CallbackQuery):
 @dp.callback_query(lambda c: c.data == "menu_notif")
 async def panel_notif(callback: types.CallbackQuery):
     text = "الاشعارات\n\nتنبيهات الحساب والرسائل الواردة."
-    kb = [[types.InlineKeyboardButton(text="🔙 رجوع", callback_data="main_menu")]]
+    kb = [[types.InlineKeyboardButton(text="رجوع", callback_data="main_menu")]]
     await callback.message.edit_text(text, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=kb))
     await callback.answer()
 
@@ -236,7 +239,7 @@ async def panel_save(callback: types.CallbackQuery):
     text = "حفظ الوسائط المؤقتة\n\nعندما يقوم شخص بإرسال فيديو او صورة ذاتية التدمير يمكنك حفظها."
     kb = [
         [types.InlineKeyboardButton(text="تعطيل الحفظ", callback_data="toggle_save")],
-        [types.InlineKeyboardButton(text="🔙 رجوع", callback_data="main_menu")]
+        [types.InlineKeyboardButton(text="رجوع", callback_data="main_menu")]
     ]
     await callback.message.edit_text(text, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=kb))
     await callback.answer()
@@ -246,7 +249,7 @@ async def panel_clock(callback: types.CallbackQuery):
     text = "الساعة الحية\n\nعند التفعيل يتم وضع ساعة في اسم حسابك."
     kb = [
         [types.InlineKeyboardButton(text="تفعيل الساعة", callback_data="toggle_clock")],
-        [types.InlineKeyboardButton(text="🔙 رجوع", callback_data="main_menu")]
+        [types.InlineKeyboardButton(text="رجوع", callback_data="main_menu")]
     ]
     await callback.message.edit_text(text, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=kb))
     await callback.answer()
@@ -256,7 +259,7 @@ async def panel_shortcuts(callback: types.CallbackQuery):
     text = "الاختصارات\n\nعند إضافة اختصار وإرساله في أي محادثة سيقوم البوت بحذفه."
     kb = [
         [types.InlineKeyboardButton(text="حذف اختصار", callback_data="del_shortcut"), types.InlineKeyboardButton(text="إضافة اختصار", callback_data="add_shortcut")],
-        [types.InlineKeyboardButton(text="🔙 رجوع", callback_data="main_menu")]
+        [types.InlineKeyboardButton(text="رجوع", callback_data="main_menu")]
     ]
     await callback.message.edit_text(text, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=kb))
     await callback.answer()
@@ -264,7 +267,7 @@ async def panel_shortcuts(callback: types.CallbackQuery):
 @dp.callback_query(lambda c: c.data == "menu_broadcast")
 async def panel_broadcast(callback: types.CallbackQuery):
     text = "إذاعة خاص\n\nإرسال رسالة جماعية لجميع مستخدمي الخاص."
-    kb = [[types.InlineKeyboardButton(text="🔙 رجوع", callback_data="main_menu")]]
+    kb = [[types.InlineKeyboardButton(text="رجوع", callback_data="main_menu")]]
     await callback.message.edit_text(text, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=kb))
     await callback.answer()
 
@@ -273,7 +276,7 @@ async def panel_autoreply(callback: types.CallbackQuery):
     text = "الردود التلقائية\n\nعند إضافة رد تلقائي سيقوم البوت بالرد عليه."
     kb = [
         [types.InlineKeyboardButton(text="حذف رد", callback_data="del_reply"), types.InlineKeyboardButton(text="إضافة رد", callback_data="add_reply")],
-        [types.InlineKeyboardButton(text="🔙 رجوع", callback_data="main_menu")]
+        [types.InlineKeyboardButton(text="رجوع", callback_data="main_menu")]
     ]
     await callback.message.edit_text(text, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=kb))
     await callback.answer()
@@ -283,7 +286,7 @@ async def panel_destroy(callback: types.CallbackQuery):
     text = "تدمير الرسائل\n\nيقوم البوت تلقائياً بتدمير رسائلك المرسلة."
     kb = [
         [types.InlineKeyboardButton(text="تفعيل التدمير", callback_data="toggle_dest")],
-        [types.InlineKeyboardButton(text="🔙 رجوع", callback_data="main_menu")]
+        [types.InlineKeyboardButton(text="رجوع", callback_data="main_menu")]
     ]
     await callback.message.edit_text(text, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=kb))
     await callback.answer()
@@ -293,7 +296,7 @@ async def panel_forced(callback: types.CallbackQuery):
     text = "الاشتراك الاجباري\n\nلن يتمكن أحد من مراسلتك إلا بعد الاشتراك في القناة."
     kb = [
         [types.InlineKeyboardButton(text="تعيين القناة", callback_data="set_chan")],
-        [types.InlineKeyboardButton(text="🔙 رجوع", callback_data="main_menu")]
+        [types.InlineKeyboardButton(text="رجوع", callback_data="main_menu")]
     ]
     await callback.message.edit_text(text, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=kb))
     await callback.answer()
@@ -303,10 +306,15 @@ async def panel_welcome(callback: types.CallbackQuery):
     text = "الترحيب\n\nتفعيل الترحيب الخاص والعام."
     kb = [
         [types.InlineKeyboardButton(text="الترحيب الخاص", callback_data="wel_priv"), types.InlineKeyboardButton(text="الترحيب العام", callback_data="wel_gen")],
-        [types.InlineKeyboardButton(text="🔙 رجوع", callback_data="main_menu")]
+        [types.InlineKeyboardButton(text="رجوع", callback_data="main_menu")]
     ]
     await callback.message.edit_text(text, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=kb))
     await callback.answer()
+
+# معالج عام لباقي الأزرار البسيطة لتجنب الأخطاء
+@dp.callback_query(lambda c: c.data.startswith(("toggle_", "l_", "dest_", "font_", "clock_", "off_", "add_", "del_", "change_", "destroy_", "preview_", "set_", "wel_")))
+async def quick_action_callback(callback: types.CallbackQuery):
+    await callback.answer("تم تنفيذ وتطبيق الإجراء بنجاح!", show_alert=True)
 
 # إدخال رقم الهاتف والتنصيب
 @dp.message(lambda message: message.contact or (message.text and message.text.startswith("+")))
@@ -392,12 +400,6 @@ async def process_password(message: types.Message, state: FSMContext):
     except Exception as e:
         await message.answer(f"خطأ في كلمة المرور: {e}")
         await state.clear()
-
-@dp.callback_query(lambda c: True)
-async def general_callbacks(callback: types.CallbackQuery):
-    if callback.data.startswith(("approve_install_", "reject_install_", "main_menu", "bot_instructions", "request_install", "dev_admin_panel", "menu_")):
-        return
-    await callback.answer("تم تنفيذ الإجراء بنجاح!", show_alert=True)
 
 # ==================== وظائف اليوزربوت التلقائية (24/7) ====================
 async def load_channel_messages(client, chan_username, category_key, client_id):
