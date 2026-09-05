@@ -124,27 +124,16 @@ async def db_delete(table: str, **filters):
 
 
 async def get_user_row(user_id: int) -> Optional[dict]:
-    res = await db_select("user_bots", "*")
-    rows = [x for x in (res.data or []) if x.get("user_id") == user_id]
-    return rows[0] if rows else None
+    try:
+        res = await db_select("user_bots", "*")
+        rows = [x for x in (res.data or []) if x.get("user_id") == user_id]
+        return rows[0] if rows else None
+    except Exception:
+        return None
 
 
 async def is_subscription_active(user_id: int) -> bool:
-    row = await get_user_row(user_id)
-    if not row or not row.get("is_active"):
-        start = utcnow()
-        expires = add_month(start)
-        await db_upsert(
-            "user_bots",
-            {
-                "user_id": user_id,
-                "is_approved": True,
-                "subscription_status": "active",
-                "subscription_started_at": start.isoformat(),
-                "subscription_expires_at": expires.isoformat(),
-            },
-        )
-        return True
+    # تم إرجاع True مباشرة لضمان عدم حدوث أي تعليق أو منع للمستخدم
     return True
 
 
@@ -254,16 +243,20 @@ async def subscription(callback: types.CallbackQuery):
     start_date = utcnow()
     expires = add_month(start_date)
 
-    await db_upsert(
-        "user_bots",
-        {
-            "user_id": user_id,
-            "is_approved": True,
-            "subscription_status": "active",
-            "subscription_started_at": start_date.isoformat(),
-            "subscription_expires_at": expires.isoformat(),
-        },
-    )
+    try:
+        await db_upsert(
+            "user_bots",
+            {
+                "user_id": user_id,
+                "is_approved": True,
+                "is_active": True,
+                "subscription_status": "active",
+                "subscription_started_at": start_date.isoformat(),
+                "subscription_expires_at": expires.isoformat(),
+            },
+        )
+    except Exception:
+        pass
 
     kb = types.InlineKeyboardMarkup(
         inline_keyboard=[
@@ -356,19 +349,22 @@ async def finalize_login(client: TelegramClient, user_id: int, message: types.Me
     session = client.session.save()
     me = await client.get_me()
 
-    await db_upsert(
-        "user_bots",
-        {
-            "user_id": user_id,
-            "telegram_user_id": me.id,
-            "username": me.username,
-            "first_name": me.first_name,
-            "account_id": me.id,
-            "session_string": session,
-            "is_approved": True,
-            "is_active": True,
-        },
-    )
+    try:
+        await db_upsert(
+            "user_bots",
+            {
+                "user_id": user_id,
+                "telegram_user_id": me.id,
+                "username": me.username,
+                "first_name": me.first_name,
+                "account_id": me.id,
+                "session_string": session,
+                "is_approved": True,
+                "is_active": True,
+            },
+        )
+    except Exception:
+        pass
 
     LOGIN_CLIENTS.pop(user_id, None)
     await message.answer(
@@ -385,7 +381,6 @@ async def finalize_login(client: TelegramClient, user_id: int, message: types.Me
 @dp.callback_query(F.data == "start_install")
 async def start_install(callback: types.CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
-    await is_subscription_active(user_id)
 
     old = LOGIN_CLIENTS.get(user_id)
     if old:
@@ -419,19 +414,22 @@ async def start_install(callback: types.CallbackQuery, state: FSMContext):
             session = client.session.save()
             me = await client.get_me()
 
-            await db_upsert(
-                "user_bots",
-                {
-                    "user_id": user_id,
-                    "telegram_user_id": me.id,
-                    "username": me.username,
-                    "first_name": me.first_name,
-                    "account_id": me.id,
-                    "session_string": session,
-                    "is_approved": True,
-                    "is_active": True,
-                },
-            )
+            try:
+                await db_upsert(
+                    "user_bots",
+                    {
+                        "user_id": user_id,
+                        "telegram_user_id": me.id,
+                        "username": me.username,
+                        "first_name": me.first_name,
+                        "account_id": me.id,
+                        "session_string": session,
+                        "is_approved": True,
+                        "is_active": True,
+                    },
+                )
+            except Exception:
+                pass
 
             await callback.message.answer(
                 f"تم تنصيب الحساب بنجاح عبر QR.\nالاسم: {me.first_name or ''}",
@@ -695,11 +693,6 @@ async def broadcast(callback: types.CallbackQuery, state: FSMContext):
 
 @dp.message(Form.waiting_broadcast)
 async def do_broadcast(message: types.Message, state: FSMContext):
-    if not await is_subscription_active(message.from_user.id):
-        await message.answer("اشتراكك غير فعال.")
-        await state.clear()
-        return
-
     row = await get_user_row(message.from_user.id)
     if not row or not row.get("account_id"):
         await message.answer("لا يوجد حساب مرتبط.")
@@ -925,26 +918,6 @@ async def clock_loop(client: TelegramClient, user_id: int, account_id: int):
         await asyncio.sleep(60)
 
 
-async def subscription_guard(client: TelegramClient, user_id: int):
-    while True:
-        try:
-            if not await is_subscription_active(user_id):
-                await db_update(
-                    "user_bots",
-                    {
-                        "is_active": False,
-                        "subscription_status": "expired",
-                    },
-                    user_id=user_id,
-                )
-                await client.disconnect()
-                return
-        except Exception as e:
-            print("[SUBSCRIPTION]", user_id, e)
-
-        await asyncio.sleep(300)
-
-
 async def start_userbot(session_string: str, account_id: int, owner_id: int):
     if account_id in ACTIVE_CLIENTS:
         try:
@@ -972,7 +945,6 @@ async def start_userbot(session_string: str, account_id: int, owner_id: int):
 
     USER_TASKS[account_id] = [
         asyncio.create_task(clock_loop(client, owner_id, account_id)),
-        asyncio.create_task(subscription_guard(client, owner_id)),
     ]
 
     @client.on(events.NewMessage(incoming=True))
@@ -1024,7 +996,7 @@ async def start_userbot(session_string: str, account_id: int, owner_id: int):
                     pass
                 return
 
-            # كتم عبر الآيدي (من خلال البوت أو الحساب)
+            # كتم عبر الآيدي
             if low.startswith("كتم الأيدي "):
                 try:
                     target_id = int(text.replace("كتم الأيدي", "").strip())
@@ -1226,17 +1198,6 @@ async def restore_sessions():
         if not user_id:
             continue
 
-        if not await is_subscription_active(user_id):
-            await db_update(
-                "user_bots",
-                {
-                    "is_active": False,
-                    "subscription_status": "expired",
-                },
-                user_id=user_id,
-            )
-            continue
-
         try:
             asyncio.create_task(
                 start_userbot(
@@ -1245,7 +1206,7 @@ async def restore_sessions():
                     user_id,
                 )
             )
-            asyncio.sleep(0.3)
+            await asyncio.sleep(0.3)
         except Exception as e:
             print("[RESTORE]", user_id, e)
 
