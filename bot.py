@@ -14,7 +14,7 @@ API_HASH = os.environ.get("API_HASH", "")
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
-WEB_APP_URL = os.environ.get("WEB_APP_URL", "https://your-app.vercel.app")
+WEB_APP_URL = os.environ.get("WEB_APP_URL", "")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -47,7 +47,7 @@ CLOCK_FONTS = {
     "normal": ("0123456789", "0123456789")
 }
 
-# ==================== إعدادات قابلة للتخصيص ====================
+# ==================== دوال مساعدة ====================
 def get_setting(key, default=None):
     try:
         res = supabase.table("bot_settings").select("*").eq("setting_key", key).execute()
@@ -76,14 +76,14 @@ def check_subscription(user_id):
         if not sub.get("is_active", False):
             return False, "الاشتراك موقوف"
         if sub.get("is_permanent", False):
-            return True, "اشتراك دائم"
+            return True, "دائم"
         expiry = sub.get("expiry_date")
         if expiry:
             expiry_date = datetime.datetime.fromisoformat(expiry)
             if expiry_date < datetime.datetime.now():
                 supabase.table("subscriptions").update({"is_active": False}).eq("user_id", user_id).execute()
-                return False, "انتهى الاشتراك"
-        return True, "اشتراك فعال"
+                return False, "انتهى"
+        return True, "فعال"
     except:
         return False, "خطأ"
 
@@ -101,6 +101,17 @@ def get_subscription_info(user_id):
         return "لا يوجد"
     except:
         return "خطأ"
+
+def is_dev(user_id):
+    if user_id == DEV_ID:
+        return True
+    admins = get_setting("admins", [DEV_ID])
+    return user_id in admins
+
+def safe_get(data_dict, key, default=None):
+    if isinstance(data_dict, dict):
+        return data_dict.get(key, default)
+    return default
 
 # ==================== بوت الإدارة ====================
 from aiogram import Bot, Dispatcher, types, F
@@ -132,20 +143,15 @@ class SettingsState(StatesGroup):
     waiting_for_broadcast_text = State()
     waiting_for_admins = State()
 
-def safe_get(data_dict, key, default=None):
-    if isinstance(data_dict, dict):
-        return data_dict.get(key, default)
-    return default
-
 def get_main_menu_keyboard(user_id):
-    kb = [
-        [types.InlineKeyboardButton(text="فتح اللوحة الملونة", web_app=types.WebAppInfo(url=WEB_APP_URL))],
-        [types.InlineKeyboardButton(text="🚀 تفعيل الاشتراك", callback_data="free_subscription"),
-         types.InlineKeyboardButton(text="⚙️ لوحة التحكم", callback_data="my_settings")],
-        [types.InlineKeyboardButton(text="📚 تعليمات", callback_data="bot_instructions"),
-         types.InlineKeyboardButton(text="👨‍💻 المطور", url=f"https://t.me/{DEV_USER.replace('@','')}")]
-    ]
-    if user_id == DEV_ID:
+    kb = []
+    if WEB_APP_URL:
+        kb.append([types.InlineKeyboardButton(text="🎨 فتح اللوحة الملونة", web_app=types.WebAppInfo(url=WEB_APP_URL))])
+    kb.append([types.InlineKeyboardButton(text="🚀 تفعيل الاشتراك", callback_data="free_subscription"),
+               types.InlineKeyboardButton(text="⚙️ لوحة التحكم", callback_data="my_settings")])
+    kb.append([types.InlineKeyboardButton(text="📚 تعليمات", callback_data="bot_instructions"),
+               types.InlineKeyboardButton(text="👨‍💻 المطور", url=f"https://t.me/{DEV_USER.replace('@','')}")])
+    if is_dev(user_id):
         kb.append([types.InlineKeyboardButton(text="🛠 لوحة المطور", callback_data="dev_admin_panel")])
     return types.InlineKeyboardMarkup(inline_keyboard=kb)
 
@@ -159,25 +165,25 @@ def get_control_panel_keyboard(bot_info):
     lock_st = "مقفل" if safe_get(bot_info, "lock_private_enabled", False) else "مفتوح"
     current_font = safe_get(bot_info, "clock_font", "circle")
 
-    kb = [
-        [types.InlineKeyboardButton(text="فتح اللوحة الملونة", web_app=types.WebAppInfo(url=WEB_APP_URL))],
-        [types.InlineKeyboardButton(text="🔇 الكتم والحظر", callback_data="mute_ban_menu")],
-        [types.InlineKeyboardButton(text=f"🗑 تدمير: {destroy_st}", callback_data="destroy_messages_menu"),
-         types.InlineKeyboardButton(text=f"📢 نشر: {publish_st}", callback_data="auto_publish_menu")],
-        [types.InlineKeyboardButton(text=f"🛡 حماية: {spam_st}", callback_data="toggle_spam"),
-         types.InlineKeyboardButton(text=f"🔒 الخاص: {lock_st}", callback_data="toggle_lock_private")],
-        [types.InlineKeyboardButton(text=f"🚫 فلتر: {filter_st}", callback_data="toggle_filter"),
-         types.InlineKeyboardButton(text=f"⏰ ساعة: {clock_st}", callback_data="toggle_clock")],
-        [types.InlineKeyboardButton(text=f"💾 وسائط: {save_st}", callback_data="toggle_save_media"),
-         types.InlineKeyboardButton(text=f"🔤 خط: {current_font}", callback_data="choose_font")],
-        [types.InlineKeyboardButton(text="🤖 ردود", callback_data="set_auto_reply"),
-         types.InlineKeyboardButton(text="🗑 حذف ردود", callback_data="del_auto_reply")],
-        [types.InlineKeyboardButton(text="📢 اشتراك إجباري", callback_data="set_forced"),
-         types.InlineKeyboardButton(text="🚫 إيقافه", callback_data="off_forced")],
-        [types.InlineKeyboardButton(text="👋 ترحيب", callback_data="set_welcome"),
-         types.InlineKeyboardButton(text="🔄 تحديث", callback_data="refresh_bot")],
-        [types.InlineKeyboardButton(text="🏠 الرئيسية", callback_data="main_menu")]
-    ]
+    kb = []
+    if WEB_APP_URL:
+        kb.append([types.InlineKeyboardButton(text="🎨 اللوحة الملونة", web_app=types.WebAppInfo(url=WEB_APP_URL))])
+    kb.append([types.InlineKeyboardButton(text="🔇 الكتم والحظر", callback_data="mute_ban_menu")])
+    kb.append([types.InlineKeyboardButton(text=f"🗑 تدمير: {destroy_st}", callback_data="destroy_messages_menu"),
+               types.InlineKeyboardButton(text=f"📢 نشر: {publish_st}", callback_data="auto_publish_menu")])
+    kb.append([types.InlineKeyboardButton(text=f"🛡 حماية: {spam_st}", callback_data="toggle_spam"),
+               types.InlineKeyboardButton(text=f"🔒 الخاص: {lock_st}", callback_data="toggle_lock_private")])
+    kb.append([types.InlineKeyboardButton(text=f"🚫 فلتر: {filter_st}", callback_data="toggle_filter"),
+               types.InlineKeyboardButton(text=f"⏰ ساعة: {clock_st}", callback_data="toggle_clock")])
+    kb.append([types.InlineKeyboardButton(text=f"💾 وسائط: {save_st}", callback_data="toggle_save_media"),
+               types.InlineKeyboardButton(text=f"🔤 خط: {current_font}", callback_data="choose_font")])
+    kb.append([types.InlineKeyboardButton(text="🤖 ردود", callback_data="set_auto_reply"),
+               types.InlineKeyboardButton(text="🗑 حذف ردود", callback_data="del_auto_reply")])
+    kb.append([types.InlineKeyboardButton(text="📢 اشتراك إجباري", callback_data="set_forced"),
+               types.InlineKeyboardButton(text="🚫 إيقافه", callback_data="off_forced")])
+    kb.append([types.InlineKeyboardButton(text="👋 ترحيب", callback_data="set_welcome"),
+               types.InlineKeyboardButton(text="🔄 تحديث", callback_data="refresh_bot")])
+    kb.append([types.InlineKeyboardButton(text="🏠 الرئيسية", callback_data="main_menu")])
     return types.InlineKeyboardMarkup(inline_keyboard=kb)
 
 async def is_user_admin(client, chat_id, user_id):
@@ -191,72 +197,110 @@ async def is_user_admin(client, chat_id, user_id):
     except:
         return False
 
-# ==================== معالجة Web App ====================
+# ==================== Web App Handler ====================
 @dp.message(lambda message: message.web_app_data is not None)
 async def handle_web_app(message: types.Message):
     data = message.web_app_data.data
     user_id = message.from_user.id
     
-    if user_id != DEV_ID:
-        await message.answer("هذه اللوحة مخصصة للمطور فقط")
-        return
-    
-    if data == "dev_panel":
-        await dev_admin_panel_from_message(message)
+    if data == "dev_panel" and is_dev(user_id):
+        await show_dev_panel(message)
     elif data == "subscription":
         await message.answer("اضغط /start للبدء")
     elif data == "settings":
-        await show_settings_from_message(message)
+        await show_settings(message)
     elif data == "instructions":
         await message.answer("التعليمات:\n\n- غنيلي - شعر - مزج - ميمز - قرآن\n- يوت اسم الأغنية\n- كتم - فك كتم\n- حظر - فك حظر")
     elif data == "contact":
-        await message.answer(f"تواصل مع المطور: {DEV_USER}")
-    elif data == "mute_menu":
-        await show_mute_menu(message)
-    elif data == "ban_menu":
-        await show_ban_menu(message)
-    elif data == "destroy":
+        await message.answer(f"المطور: {DEV_USER}")
+    elif data == "mute_menu" and is_dev(user_id):
+        await show_mute_ban_menu(message)
+    elif data == "ban_menu" and is_dev(user_id):
+        await show_mute_ban_menu(message)
+    elif data == "destroy" and is_dev(user_id):
         await show_destroy_menu(message)
-    elif data == "publish":
+    elif data == "publish" and is_dev(user_id):
         await show_publish_menu(message)
+    elif data == "subs" and is_dev(user_id):
+        await show_subscriptions(message)
+    elif data == "blocked" and is_dev(user_id):
+        await show_blocked(message)
+    else:
+        await message.answer("لا تملك صلاحية")
 
-async def dev_admin_panel_from_message(message: types.Message):
-    try:
-        users_res = supabase.table("user_bots").select("*").execute()
-        total = len(users_res.data) if users_res.data else 0
-        running = len(ACTIVE_CLIENTS)
-        
-        subs_res = supabase.table("subscriptions").select("*").execute()
-        active_subs = sum(1 for x in (subs_res.data or []) if x.get("is_active"))
-        
-        kb = types.InlineKeyboardMarkup(inline_keyboard=[
-            [types.InlineKeyboardButton(text="👥 المستخدمين", callback_data="dev_list_users"),
-             types.InlineKeyboardButton(text="📢 إذاعة", callback_data="dev_broadcast")],
-            [types.InlineKeyboardButton(text="💳 الاشتراكات", callback_data="dev_subscriptions"),
-             types.InlineKeyboardButton(text="🚫 المحظورين", callback_data="dev_blocked_list")],
-            [types.InlineKeyboardButton(text="👑 الأدمنية", callback_data="dev_admins"),
-             types.InlineKeyboardButton(text="📊 إحصائيات", callback_data="dev_stats")],
-            [types.InlineKeyboardButton(text="🛠 إعدادات", callback_data="dev_bot_settings"),
-             types.InlineKeyboardButton(text="▶️ تشغيل الكل", callback_data="dev_start_all")],
-            [types.InlineKeyboardButton(text="🏠 الرئيسية", callback_data="main_menu")]
-        ])
-        
-        await message.answer(
-            f"🛠 لوحة المطور:\n\n"
-            f"👥 المستخدمين: {total}\n"
-            f"⚡ يعملون: {running}\n"
-            f"💳 اشتراكات نشطة: {active_subs}",
-            reply_markup=kb
-        )
-    except Exception as e:
-        print(f"ERROR: {e}")
-        await message.answer("خطأ")
+async def show_dev_panel(message):
+    users_res = supabase.table("user_bots").select("*").execute()
+    total = len(users_res.data) if users_res.data else 0
+    running = len(ACTIVE_CLIENTS)
+    
+    kb = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="👥 المستخدمين", callback_data="dev_list_users"),
+         types.InlineKeyboardButton(text="📢 إذاعة", callback_data="dev_broadcast")],
+        [types.InlineKeyboardButton(text="💳 الاشتراكات", callback_data="dev_subscriptions"),
+         types.InlineKeyboardButton(text="🚫 المحظورين", callback_data="dev_blocked_list")],
+        [types.InlineKeyboardButton(text="👑 الأدمنية", callback_data="dev_admins"),
+         types.InlineKeyboardButton(text="📊 إحصائيات", callback_data="dev_stats")],
+        [types.InlineKeyboardButton(text="▶️ تشغيل الكل", callback_data="dev_start_all")],
+        [types.InlineKeyboardButton(text="🏠 الرئيسية", callback_data="main_menu")]
+    ])
+    
+    await message.answer(f"🛠 لوحة المطور:\n\n👥 المستخدمين: {total}\n⚡ يعملون: {running}", reply_markup=kb)
 
+async def show_settings(message):
+    user_id = message.from_user.id
+    res = supabase.table("user_bots").select("*").or_(f"user_id.eq.{user_id},account_id.eq.{user_id}").execute()
+    if res.data:
+        markup = get_control_panel_keyboard(res.data[0])
+        await message.answer("لوحة التحكم:", reply_markup=markup)
+
+async def show_mute_ban_menu(message):
+    kb = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="كتم مستخدم", callback_data="mute_user"),
+         types.InlineKeyboardButton(text="حظر مستخدم", callback_data="ban_user")],
+        [types.InlineKeyboardButton(text="قائمة المكتمين", callback_data="list_muted"),
+         types.InlineKeyboardButton(text="قائمة المحظورين", callback_data="list_banned")],
+        [types.InlineKeyboardButton(text="رجوع", callback_data="my_settings")]
+    ])
+    await message.answer("إدارة الكتم والحظر:", reply_markup=kb)
+
+async def show_destroy_menu(message):
+    kb = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="تفعيل/إيقاف", callback_data="toggle_destroy")],
+        [types.InlineKeyboardButton(text="تحديد المدة", callback_data="set_destroy_timer")],
+        [types.InlineKeyboardButton(text="رجوع", callback_data="my_settings")]
+    ])
+    await message.answer("تدمير الرسائل:", reply_markup=kb)
+
+async def show_publish_menu(message):
+    kb = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="تفعيل/إيقاف", callback_data="toggle_publish")],
+        [types.InlineKeyboardButton(text="إضافة قناة", callback_data="add_publish_channel")],
+        [types.InlineKeyboardButton(text="القنوات", callback_data="list_publish_channels")],
+        [types.InlineKeyboardButton(text="رجوع", callback_data="my_settings")]
+    ])
+    await message.answer("النشر التلقائي:", reply_markup=kb)
+
+async def show_subscriptions(message):
+    kb = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="منح اشتراك", callback_data="dev_grant_sub")],
+        [types.InlineKeyboardButton(text="قائمة الاشتراكات", callback_data="dev_sub_list")],
+        [types.InlineKeyboardButton(text="رجوع", callback_data="dev_admin_panel")]
+    ])
+    await message.answer("الاشتراكات:", reply_markup=kb)
+
+async def show_blocked(message):
+    kb = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="حظر مستخدم", callback_data="dev_block_user")],
+        [types.InlineKeyboardButton(text="قائمة المحظورين", callback_data="dev_blocked_list")],
+        [types.InlineKeyboardButton(text="رجوع", callback_data="dev_admin_panel")]
+    ])
+    await message.answer("المحظورين:", reply_markup=kb)
+
+# ==================== Start ====================
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     user_id = message.from_user.id
     
-    # التحقق من الحظر
     try:
         blocked = supabase.table("blocked_users").select("*").eq("user_id", user_id).execute()
         if blocked.data:
@@ -265,72 +309,41 @@ async def cmd_start(message: types.Message):
     except:
         pass
     
-    # التحقق من الأدمنية
-    is_admin = False
-    try:
-        admins = get_setting("admins", [DEV_ID])
-        if user_id in admins:
-            is_admin = True
-    except:
-        pass
-    
-    if user_id == DEV_ID or is_admin:
-        # مطور أو أدمن
-        try:
-            res = supabase.table("user_bots").select("*").or_(f"user_id.eq.{user_id},account_id.eq.{user_id}").execute()
-            
-            if res.data and res.data[0].get("session_string"):
-                bot_info = res.data[0]
-                markup = get_control_panel_keyboard(bot_info)
-                sub_info = get_subscription_info(user_id)
-                
-                await message.answer(
-                    f"لوحة التحكم\n\n"
-                    f"اشتراكك: {sub_info}",
-                    reply_markup=markup
-                )
-                return
-            
-            await message.answer("مرحباً بك", reply_markup=get_main_menu_keyboard(user_id))
-        except Exception as e:
-            print(f"ERROR: {e}")
-            await message.answer("حدث خطأ")
-    else:
-        # مستخدم عادي
+    if not is_dev(user_id):
         is_valid, msg = check_subscription(user_id)
         if not is_valid:
-            kb = types.InlineKeyboardMarkup(inline_keyboard=[
-                [types.InlineKeyboardButton(text="🚀 طلب اشتراك", callback_data="free_subscription")],
-                [types.InlineKeyboardButton(text="👨‍💻 المطور", url=f"https://t.me/{DEV_USER.replace('@','')}")]
-            ])
-            await message.answer(
-                f"مرحباً بك\n\n"
-                f"للاستفادة من البوت تحتاج اشتراك\n"
-                f"سبب الرفض: {msg}",
-                reply_markup=kb
-            )
+            has_bot = False
+            try:
+                bot_res = supabase.table("user_bots").select("user_id").eq("user_id", user_id).execute()
+                has_bot = bool(bot_res.data)
+            except:
+                pass
+            
+            if not has_bot:
+                kb = types.InlineKeyboardMarkup(inline_keyboard=[
+                    [types.InlineKeyboardButton(text="🚀 طلب اشتراك", callback_data="free_subscription")],
+                    [types.InlineKeyboardButton(text="👨‍💻 المطور", url=f"https://t.me/{DEV_USER.replace('@','')}")]
+                ])
+                await message.answer(f"تحتاج اشتراك للاستخدام\n\nالسبب: {msg}", reply_markup=kb)
+                return
+    
+    try:
+        res = supabase.table("user_bots").select("*").or_(f"user_id.eq.{user_id},account_id.eq.{user_id}").execute()
+        
+        if res.data and res.data[0].get("session_string"):
+            bot_info = res.data[0]
+            markup = get_control_panel_keyboard(bot_info)
+            sub_info = get_subscription_info(user_id)
+            
+            await message.answer(f"لوحة التحكم\n\nاشتراكك: {sub_info}", reply_markup=markup)
             return
         
-        try:
-            res = supabase.table("user_bots").select("*").or_(f"user_id.eq.{user_id},account_id.eq.{user_id}").execute()
-            
-            if res.data and res.data[0].get("session_string"):
-                bot_info = res.data[0]
-                markup = get_control_panel_keyboard(bot_info)
-                sub_info = get_subscription_info(user_id)
-                
-                await message.answer(
-                    f"لوحة التحكم\n\n"
-                    f"اشتراكك: {sub_info}",
-                    reply_markup=markup
-                )
-                return
-            
-            await message.answer("مرحباً بك", reply_markup=get_main_menu_keyboard(user_id))
-        except Exception as e:
-            print(f"ERROR: {e}")
-            await message.answer("حدث خطأ")
+        await message.answer("مرحباً بك", reply_markup=get_main_menu_keyboard(user_id))
+    except Exception as e:
+        print(f"ERROR: {e}")
+        await message.answer("حدث خطأ")
 
+# ==================== تفعيل الاشتراك ====================
 @dp.callback_query(F.data == "free_subscription")
 async def free_subscription(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer("جاري التفعيل...")
@@ -341,7 +354,7 @@ async def free_subscription(callback: types.CallbackQuery, state: FSMContext):
     try:
         res = supabase.table("subscriptions").select("user_id").execute()
         if len(res.data or []) >= MAX_USERS:
-            await callback.message.answer("وصلنا للحد الأقصى، راسل المطور")
+            await callback.message.answer("الحد الأقصى مكتمل")
             return
     except:
         pass
@@ -371,132 +384,52 @@ async def free_subscription(callback: types.CallbackQuery, state: FSMContext):
         one_time_keyboard=True
     )
     
-    await callback.message.answer(
-        "تم تفعيل اشتراك تجريبي 7 أيام\n\n"
-        "اضغط زر مشاركة رقم الهاتف",
-        reply_markup=contact_kb
-    )
+    await callback.message.answer("تم تفعيل اشتراك 7 أيام\n\nاضغط زر مشاركة رقم الهاتف", reply_markup=contact_kb)
     await state.set_state(LoginState.waiting_for_phone)
 
 # ==================== لوحة المطور ====================
 @dp.callback_query(F.data == "dev_admin_panel")
 async def dev_admin_panel(callback: types.CallbackQuery):
-    if callback.from_user.id != DEV_ID:
-        # التحقق من الأدمنية
-        admins = get_setting("admins", [DEV_ID])
-        if callback.from_user.id not in admins:
-            await callback.answer("مخصص للمطور فقط")
-            return
-    
-    try:
-        users_res = supabase.table("user_bots").select("*").execute()
-        total = len(users_res.data) if users_res.data else 0
-        running = len(ACTIVE_CLIENTS)
-        
-        subs_res = supabase.table("subscriptions").select("*").execute()
-        active_subs = sum(1 for x in (subs_res.data or []) if x.get("is_active"))
-        
-        blocked_res = supabase.table("blocked_users").select("*").execute()
-        blocked_count = len(blocked_res.data) if blocked_res.data else 0
-        
-        kb = types.InlineKeyboardMarkup(inline_keyboard=[
-            [types.InlineKeyboardButton(text="👥 المستخدمين", callback_data="dev_list_users"),
-             types.InlineKeyboardButton(text="📢 إذاعة", callback_data="dev_broadcast")],
-            [types.InlineKeyboardButton(text="💳 الاشتراكات", callback_data="dev_subscriptions"),
-             types.InlineKeyboardButton(text="🚫 المحظورين", callback_data="dev_blocked_list")],
-            [types.InlineKeyboardButton(text="👑 الأدمنية", callback_data="dev_admins"),
-             types.InlineKeyboardButton(text="📊 إحصائيات", callback_data="dev_stats")],
-            [types.InlineKeyboardButton(text="🛠 إعدادات", callback_data="dev_bot_settings"),
-             types.InlineKeyboardButton(text="▶️ تشغيل الكل", callback_data="dev_start_all")],
-            [types.InlineKeyboardButton(text="🏠 الرئيسية", callback_data="main_menu")]
-        ])
-        
-        await callback.message.edit_text(
-            f"🛠 لوحة المطور:\n\n"
-            f"👥 المستخدمين: {total}\n"
-            f"⚡ يعملون: {running}\n"
-            f"💳 اشتراكات نشطة: {active_subs}\n"
-            f"🚫 محظورين: {blocked_count}",
-            reply_markup=kb
-        )
-    except Exception as e:
-        print(f"ERROR: {e}")
-        await callback.answer("خطأ")
-    await callback.answer()
-
-# ==================== الأدمنية ====================
-@dp.callback_query(F.data == "dev_admins")
-async def dev_admins(callback: types.CallbackQuery):
-    if callback.from_user.id != DEV_ID:
+    if not is_dev(callback.from_user.id):
         await callback.answer("مخصص للمطور فقط")
         return
     
-    admins = get_setting("admins", [DEV_ID])
+    users_res = supabase.table("user_bots").select("*").execute()
+    total = len(users_res.data) if users_res.data else 0
+    running = len(ACTIVE_CLIENTS)
     
-    text = "👑 الأدمنية:\n\n"
-    kb = []
-    for admin_id in admins:
-        text += f"- {admin_id}\n"
-        kb.append([types.InlineKeyboardButton(text=f"إزالة: {admin_id}", callback_data=f"dev_remove_admin_{admin_id}")])
+    subs_res = supabase.table("subscriptions").select("*").execute()
+    active_subs = sum(1 for x in (subs_res.data or []) if x.get("is_active"))
     
-    kb.append([types.InlineKeyboardButton(text="➕ إضافة أدمن", callback_data="dev_add_admin")])
-    kb.append([types.InlineKeyboardButton(text="🔙 رجوع", callback_data="dev_admin_panel")])
+    kb = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="👥 المستخدمين", callback_data="dev_list_users"),
+         types.InlineKeyboardButton(text="📢 إذاعة", callback_data="dev_broadcast")],
+        [types.InlineKeyboardButton(text="💳 الاشتراكات", callback_data="dev_subscriptions"),
+         types.InlineKeyboardButton(text="🚫 المحظورين", callback_data="dev_blocked_list")],
+        [types.InlineKeyboardButton(text="👑 الأدمنية", callback_data="dev_admins"),
+         types.InlineKeyboardButton(text="📊 إحصائيات", callback_data="dev_stats")],
+        [types.InlineKeyboardButton(text="▶️ تشغيل الكل", callback_data="dev_start_all")],
+        [types.InlineKeyboardButton(text="🏠 الرئيسية", callback_data="main_menu")]
+    ])
     
-    await callback.message.edit_text(text, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=kb))
+    await callback.message.edit_text(
+        f"🛠 لوحة المطور:\n\n👥 المستخدمين: {total}\n⚡ يعملون: {running}\n💳 اشتراكات: {active_subs}",
+        reply_markup=kb
+    )
     await callback.answer()
-
-@dp.callback_query(F.data == "dev_add_admin")
-async def dev_add_admin(callback: types.CallbackQuery, state: FSMContext):
-    await callback.message.answer("ارسل ايدي الأدمن الجديد:")
-    await state.set_state(SettingsState.waiting_for_admins)
-    await callback.answer()
-
-@dp.message(SettingsState.waiting_for_admins)
-async def process_add_admin(message: types.Message, state: FSMContext):
-    try:
-        admin_id = int(message.text.strip())
-        admins = get_setting("admins", [DEV_ID])
-        
-        if admin_id not in admins:
-            admins.append(admin_id)
-            save_setting("admins", admins)
-        
-        await message.answer(f"تمت إضافة الأدمن: {admin_id}")
-        await state.clear()
-    except:
-        await message.answer("ارسل رقم صحيح")
-        await state.clear()
-
-@dp.callback_query(F.data.startswith("dev_remove_admin_"))
-async def dev_remove_admin(callback: types.CallbackQuery):
-    if callback.from_user.id != DEV_ID:
-        return
-    
-    admin_id = int(callback.data.replace("dev_remove_admin_", ""))
-    
-    admins = get_setting("admins", [DEV_ID])
-    if admin_id in admins and admin_id != DEV_ID:
-        admins.remove(admin_id)
-        save_setting("admins", admins)
-    
-    await callback.answer("تم الإزالة")
-    await dev_admins(callback)
 
 # ==================== الاشتراكات ====================
 @dp.callback_query(F.data == "dev_subscriptions")
 async def dev_subscriptions(callback: types.CallbackQuery):
-    if callback.from_user.id != DEV_ID:
-        await callback.answer("مخصص للمطور فقط")
+    if not is_dev(callback.from_user.id):
         return
     
     kb = types.InlineKeyboardMarkup(inline_keyboard=[
         [types.InlineKeyboardButton(text="💳 منح اشتراك", callback_data="dev_grant_sub")],
-        [types.InlineKeyboardButton(text="⏹ إيقاف اشتراك", callback_data="dev_stop_sub")],
-        [types.InlineKeyboardButton(text="📋 قائمة الاشتراكات", callback_data="dev_sub_list")],
+        [types.InlineKeyboardButton(text="📋 القائمة", callback_data="dev_sub_list")],
         [types.InlineKeyboardButton(text="🔙 رجوع", callback_data="dev_admin_panel")]
     ])
-    
-    await callback.message.edit_text("💳 إدارة الاشتراكات:", reply_markup=kb)
+    await callback.message.edit_text("الاشتراكات:", reply_markup=kb)
     await callback.answer()
 
 @dp.callback_query(F.data == "dev_grant_sub")
@@ -513,7 +446,7 @@ async def process_grant_user_id(message: types.Message, state: FSMContext):
         await message.answer("ارسل عدد الأيام (0 = دائم):")
         await state.set_state(SettingsState.waiting_for_grant_days)
     except:
-        await message.answer("ارسل رقم صحيح")
+        await message.answer("رقم صحيح")
         await state.clear()
 
 @dp.message(SettingsState.waiting_for_grant_days)
@@ -530,7 +463,7 @@ async def process_grant_days(message: types.Message, state: FSMContext):
                 "is_permanent": True,
                 "is_active": True
             }, on_conflict="user_id").execute()
-            await message.answer(f"✅ تم منح اشتراك دائم للمستخدم: {target_id}")
+            await message.answer(f"تم منح اشتراك دائم: {target_id}")
         else:
             supabase.table("subscriptions").upsert({
                 "user_id": target_id,
@@ -540,70 +473,50 @@ async def process_grant_days(message: types.Message, state: FSMContext):
                 "is_permanent": False,
                 "is_active": True
             }, on_conflict="user_id").execute()
-            await message.answer(f"✅ تم منح اشتراك {days} يوم للمستخدم: {target_id}")
+            await message.answer(f"تم منح {days} يوم: {target_id}")
         
         await state.clear()
     except:
-        await message.answer("ارسل رقم صحيح")
+        await message.answer("رقم صحيح")
         await state.clear()
 
 @dp.callback_query(F.data == "dev_sub_list")
 async def dev_sub_list(callback: types.CallbackQuery):
-    if callback.from_user.id != DEV_ID:
+    if not is_dev(callback.from_user.id):
         return
     
-    try:
-        res = supabase.table("subscriptions").select("*").execute()
-        
-        if not res.data:
-            await callback.message.edit_text("لا يوجد اشتراكات", reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
-                [types.InlineKeyboardButton(text="🔙 رجوع", callback_data="dev_subscriptions")]
-            ]))
-            await callback.answer()
-            return
-        
-        text = "📋 الاشتراكات:\n\n"
+    res = supabase.table("subscriptions").select("*").execute()
+    
+    if not res.data:
+        await callback.message.edit_text("لا يوجد", reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+            [types.InlineKeyboardButton(text="🔙 رجوع", callback_data="dev_subscriptions")]
+        ]))
+    else:
+        text = "الاشتراكات:\n\n"
         kb = []
         for row in res.data[:20]:
             uid = row.get("user_id")
-            sub_type = row.get("subscription_type", "free")
-            is_active = "نشط ✅" if row.get("is_active") else "موقوف ❌"
-            if row.get("is_permanent"):
-                expiry = "دائم"
-            else:
-                expiry = row.get("expiry_date", "غير محدد")[:10] if row.get("expiry_date") else "غير محدد"
-            
-            text += f"👤 {uid}: {sub_type} - {is_active} - {expiry}\n"
-            kb.append([types.InlineKeyboardButton(text=f"⏹ إيقاف: {uid}", callback_data=f"dev_stop_sub_{uid}")])
-        
+            status = "نشط" if row.get("is_active") else "موقوف"
+            expiry = "دائم" if row.get("is_permanent") else (row.get("expiry_date", "")[:10] if row.get("expiry_date") else "غير محدد")
+            text += f"{uid}: {status} - {expiry}\n"
+            kb.append([types.InlineKeyboardButton(text=f"إيقاف: {uid}", callback_data=f"dev_stop_sub_{uid}")])
         kb.append([types.InlineKeyboardButton(text="🔙 رجوع", callback_data="dev_subscriptions")])
-        
         await callback.message.edit_text(text, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=kb))
-    except Exception as e:
-        print(f"ERROR: {e}")
-        await callback.answer("خطأ")
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("dev_stop_sub_"))
 async def dev_stop_sub_user(callback: types.CallbackQuery):
-    if callback.from_user.id != DEV_ID:
-        return
-    
     target_uid = int(callback.data.replace("dev_stop_sub_", ""))
-    
     supabase.table("subscriptions").update({"is_active": False}).eq("user_id", target_uid).execute()
-    
-    await callback.answer("تم إيقاف الاشتراك")
+    await callback.answer("تم الإيقاف")
     await dev_sub_list(callback)
 
 # ==================== الإذاعة ====================
 @dp.callback_query(F.data == "dev_broadcast")
 async def dev_broadcast(callback: types.CallbackQuery, state: FSMContext):
-    if callback.from_user.id != DEV_ID:
-        await callback.answer("مخصص للمطور فقط")
+    if not is_dev(callback.from_user.id):
         return
-    
-    await callback.message.answer("📢 ارسل نص الإذاعة:")
+    await callback.message.answer("ارسل نص الإذاعة:")
     await state.set_state(SettingsState.waiting_for_broadcast_text)
     await callback.answer()
 
@@ -611,62 +524,48 @@ async def dev_broadcast(callback: types.CallbackQuery, state: FSMContext):
 async def process_broadcast(message: types.Message, state: FSMContext):
     text = message.text.strip()
     
-    try:
-        res = supabase.table("user_bots").select("user_id").execute()
-        sent = 0
-        failed = 0
-        
-        for row in res.data:
-            try:
-                await bot.send_message(row['user_id'], f"📢 إعلان:\n\n{text}")
-                sent += 1
-                await asyncio.sleep(0.3)
-            except:
-                failed += 1
-        
-        await message.answer(f"📢 تم الإرسال:\n✅ نجح: {sent}\n❌ فشل: {failed}")
-    except Exception as e:
-        print(f"ERROR: {e}")
-        await message.answer("خطأ في الإذاعة")
+    res = supabase.table("user_bots").select("user_id").execute()
+    sent = 0
+    failed = 0
     
+    for row in res.data:
+        try:
+            await bot.send_message(row['user_id'], f"📢\n\n{text}")
+            sent += 1
+            await asyncio.sleep(0.3)
+        except:
+            failed += 1
+    
+    await message.answer(f"نجح: {sent}\nفشل: {failed}")
     await state.clear()
 
 # ==================== المحظورين ====================
 @dp.callback_query(F.data == "dev_blocked_list")
 async def dev_blocked_list(callback: types.CallbackQuery):
-    if callback.from_user.id != DEV_ID:
-        await callback.answer("مخصص للمطور فقط")
-        return    
-    try:
-        res = supabase.table("blocked_users").select("*").execute()
-        
-        if not res.data:
-            await callback.message.edit_text("لا يوجد محظورين", reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
-                [types.InlineKeyboardButton(text="➕ حظر", callback_data="dev_block_user")],
-                [types.InlineKeyboardButton(text="🔙 رجوع", callback_data="dev_admin_panel")]
-            ]))
-            await callback.answer()
-            return
-        
-        text = "🚫 المحظورين:\n\n"
+    if not is_dev(callback.from_user.id):
+        return
+    
+    res = supabase.table("blocked_users").select("*").execute()
+    
+    if not res.data:
+        await callback.message.edit_text("لا يوجد", reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+            [types.InlineKeyboardButton(text="➕ حظر", callback_data="dev_block_user")],
+            [types.InlineKeyboardButton(text="🔙 رجوع", callback_data="dev_admin_panel")]
+        ]))
+    else:
+        text = "المحظورين:\n\n"
         kb = []
         for row in res.data:
-            uid = row.get("user_id")
-            text += f"👤 {uid}\n"
-            kb.append([types.InlineKeyboardButton(text=f"✅ فك حظر: {uid}", callback_data=f"dev_unblock_{uid}")])
-        
+            text += f"{row['user_id']}\n"
+            kb.append([types.InlineKeyboardButton(text=f"فك حظر: {row['user_id']}", callback_data=f"dev_unblock_{row['user_id']}")])
         kb.append([types.InlineKeyboardButton(text="➕ حظر", callback_data="dev_block_user")])
         kb.append([types.InlineKeyboardButton(text="🔙 رجوع", callback_data="dev_admin_panel")])
-        
         await callback.message.edit_text(text, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=kb))
-    except Exception as e:
-        print(f"ERROR: {e}")
-        await callback.answer("خطأ")
     await callback.answer()
 
 @dp.callback_query(F.data == "dev_block_user")
 async def dev_block_user(callback: types.CallbackQuery, state: FSMContext):
-    await callback.message.answer("ارسل ايدي المستخدم للحظر:")
+    await callback.message.answer("ارسل ايدي المستخدم:")
     await state.set_state(SettingsState.waiting_for_block_user_id)
     await callback.answer()
 
@@ -674,56 +573,291 @@ async def dev_block_user(callback: types.CallbackQuery, state: FSMContext):
 async def process_block_user(message: types.Message, state: FSMContext):
     try:
         target_id = int(message.text.strip())
-        
         supabase.table("blocked_users").upsert({
             "user_id": target_id,
             "blocked_by": message.from_user.id
         }, on_conflict="user_id").execute()
-        
         supabase.table("subscriptions").update({"is_active": False}).eq("user_id", target_id).execute()
-        
-        await message.answer(f"✅ تم حظر المستخدم: {target_id}")
+        await message.answer(f"تم حظر: {target_id}")
         await state.clear()
     except:
-        await message.answer("ارسل رقم صحيح")
+        await message.answer("رقم صحيح")
         await state.clear()
 
 @dp.callback_query(F.data.startswith("dev_unblock_"))
 async def dev_unblock_user(callback: types.CallbackQuery):
-    if callback.from_user.id != DEV_ID:
-        return
-    
     target_uid = int(callback.data.replace("dev_unblock_", ""))
-    
     supabase.table("blocked_users").delete().eq("user_id", target_uid).execute()
-    
-    await callback.answer("✅ تم فك الحظر")
+    await callback.answer("تم فك الحظر")
     await dev_blocked_list(callback)
 
-# ==================== إعدادات البوت ====================
-@dp.callback_query(F.data == "dev_bot_settings")
-async def dev_bot_settings(callback: types.CallbackQuery):
+# ==================== الأدمنية ====================
+@dp.callback_query(F.data == "dev_admins")
+async def dev_admins(callback: types.CallbackQuery):
     if callback.from_user.id != DEV_ID:
-        await callback.answer("مخصص للمطور فقط")
+        await callback.answer("مخصص للمطور الأساسي")
         return
     
+    admins = get_setting("admins", [DEV_ID])
+    
+    text = "الأدمنية:\n\n"
+    kb = []
+    for admin_id in admins:
+        text += f"- {admin_id}\n"
+        if admin_id != DEV_ID:
+            kb.append([types.InlineKeyboardButton(text=f"إزالة: {admin_id}", callback_data=f"dev_remove_admin_{admin_id}")])
+    
+    kb.append([types.InlineKeyboardButton(text="➕ إضافة", callback_data="dev_add_admin")])
+    kb.append([types.InlineKeyboardButton(text="🔙 رجوع", callback_data="dev_admin_panel")])
+    
+    await callback.message.edit_text(text, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=kb))
+    await callback.answer()
+
+@dp.callback_query(F.data == "dev_add_admin")
+async def dev_add_admin(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.answer("ارسل ايدي الأدمن:")
+    await state.set_state(SettingsState.waiting_for_admins)
+    await callback.answer()
+
+@dp.message(SettingsState.waiting_for_admins)
+async def process_add_admin(message: types.Message, state: FSMContext):
+    try:
+        admin_id = int(message.text.strip())
+        admins = get_setting("admins", [DEV_ID])
+        if admin_id not in admins:
+            admins.append(admin_id)
+            save_setting("admins", admins)
+        await message.answer(f"تمت الإضافة: {admin_id}")
+        await state.clear()
+    except:
+        await message.answer("رقم صحيح")
+        await state.clear()
+
+@dp.callback_query(F.data.startswith("dev_remove_admin_"))
+async def dev_remove_admin(callback: types.CallbackQuery):
+    admin_id = int(callback.data.replace("dev_remove_admin_", ""))
+    admins = get_setting("admins", [DEV_ID])
+    if admin_id in admins and admin_id != DEV_ID:
+        admins.remove(admin_id)
+        save_setting("admins", admins)
+    await callback.answer("تم الإزالة")
+    await dev_admins(callback)
+
+# ==================== الإحصائيات ====================
+@dp.callback_query(F.data == "dev_stats")
+async def dev_stats(callback: types.CallbackQuery):
+    if not is_dev(callback.from_user.id):
+        return
+    
+    users_res = supabase.table("user_bots").select("*").execute()
+    total = len(users_res.data) if users_res.data else 0
+    
+    subs_res = supabase.table("subscriptions").select("*").execute()
+    active_subs = sum(1 for x in (subs_res.data or []) if x.get("is_active"))
+    
+    blocked_res = supabase.table("blocked_users").select("*").execute()
+    blocked = len(blocked_res.data) if blocked_res.data else 0
+    
     kb = types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text="📝 تغيير اسم البوت", callback_data="dev_change_name")],
-        [types.InlineKeyboardButton(text="👋 تغيير الترحيب", callback_data="dev_change_welcome")],
-        [types.InlineKeyboardButton(text="👥 تغيير الحد الأقصى", callback_data="dev_change_limit")],
         [types.InlineKeyboardButton(text="🔙 رجوع", callback_data="dev_admin_panel")]
     ])
     
     await callback.message.edit_text(
-        f"🛠 إعدادات البوت:\n\n"
-        f"الحد الأقصى: {MAX_USERS}",
+        f"📊 الإحصائيات:\n\n"
+        f"👥 المستخدمين: {total}\n"
+        f"💳 اشتراكات نشطة: {active_subs}\n"
+        f"🚫 محظورين: {blocked}\n"
+        f"⚡ يعملون: {len(ACTIVE_CLIENTS)}",
         reply_markup=kb
     )
     await callback.answer()
 
-# ==================== تشغيل اليوزربوت مع عدم التوقف ====================
+@dp.callback_query(F.data == "dev_start_all")
+async def dev_start_all(callback: types.CallbackQuery):
+    if not is_dev(callback.from_user.id):
+        return
+    
+    res = supabase.table("user_bots").select("*").execute()
+    started = 0
+    
+    for row in res.data:
+        if row.get("session_string") and row.get("is_active"):
+            account_id = row.get("account_id")
+            
+            if account_id in ACTIVE_CLIENTS:
+                try:
+                    await ACTIVE_CLIENTS[account_id].disconnect()
+                except:
+                    pass
+                del ACTIVE_CLIENTS[account_id]
+            
+            asyncio.create_task(start_userbot(row["session_string"], account_id))
+            started += 1
+    
+    await callback.answer(f"تم تشغيل {started}")
+    await dev_admin_panel(callback)
+
+# ==================== قائمة المستخدمين ====================
+@dp.callback_query(F.data == "dev_list_users")
+async def dev_list_users(callback: types.CallbackQuery):
+    if not is_dev(callback.from_user.id):
+        return
+    
+    res = supabase.table("user_bots").select("user_id, account_id, is_active").execute()
+    
+    if not res.data:
+        await callback.message.edit_text("لا يوجد", reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+            [types.InlineKeyboardButton(text="🔙 رجوع", callback_data="dev_admin_panel")]
+        ]))
+    else:
+        kb = []
+        for row in res.data[:10]:
+            uid = row.get("user_id")
+            status = "نشط" if row.get("is_active") else "موقوف"
+            running = "يعمل" if row.get("account_id") in ACTIVE_CLIENTS else "واقف"
+            kb.append([types.InlineKeyboardButton(text=f"{uid} - {status} - {running}", callback_data=f"dev_user_{uid}")])
+        kb.append([types.InlineKeyboardButton(text="🔙 رجوع", callback_data="dev_admin_panel")])
+        await callback.message.edit_text(f"المستخدمين ({len(res.data)}):", reply_markup=types.InlineKeyboardMarkup(inline_keyboard=kb))
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("dev_user_"))
+async def dev_manage_user(callback: types.CallbackQuery):
+    target_uid = int(callback.data.replace("dev_user_", ""))
+    
+    kb = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="▶️ تشغيل", callback_data=f"dev_start_{target_uid}"),
+         types.InlineKeyboardButton(text="⏹ إيقاف", callback_data=f"dev_stop_{target_uid}")],
+        [types.InlineKeyboardButton(text="🗑 حذف", callback_data=f"dev_del_{target_uid}")],
+        [types.InlineKeyboardButton(text="🔙 رجوع", callback_data="dev_list_users")]
+    ])
+    
+    await callback.message.edit_text(f"إدارة: {target_uid}", reply_markup=kb)
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("dev_start_"))
+async def dev_start_user(callback: types.CallbackQuery):
+    target_uid = int(callback.data.replace("dev_start_", ""))
+    
+    res = supabase.table("user_bots").select("*").eq("user_id", target_uid).execute()
+    
+    if res.data:
+        row = res.data[0]
+        account_id = row.get("account_id")
+        
+        if account_id in ACTIVE_CLIENTS:
+            try:
+                await ACTIVE_CLIENTS[account_id].disconnect()
+            except:
+                pass
+            del ACTIVE_CLIENTS[account_id]
+        
+        if row.get("session_string"):
+            supabase.table("user_bots").update({"is_active": True}).eq("user_id", target_uid).execute()
+            asyncio.create_task(start_userbot(row["session_string"], account_id))
+            await callback.answer("تم التشغيل")
+    
+    await dev_list_users(callback)
+
+@dp.callback_query(F.data.startswith("dev_stop_"))
+async def dev_stop_user(callback: types.CallbackQuery):
+    target_uid = int(callback.data.replace("dev_stop_", ""))
+    
+    res = supabase.table("user_bots").select("account_id").eq("user_id", target_uid).execute()
+    
+    if res.data:
+        account_id = res.data[0].get("account_id")
+        
+        if account_id in ACTIVE_CLIENTS:
+            try:
+                await ACTIVE_CLIENTS[account_id].disconnect()
+            except:
+                pass
+            del ACTIVE_CLIENTS[account_id]
+        
+        supabase.table("user_bots").update({"is_active": False}).eq("user_id", target_uid).execute()
+        await callback.answer("تم الإيقاف")
+    
+    await dev_list_users(callback)
+
+@dp.callback_query(F.data.startswith("dev_del_"))
+async def dev_delete_user(callback: types.CallbackQuery):
+    target_uid = int(callback.data.replace("dev_del_", ""))
+    
+    res = supabase.table("user_bots").select("account_id").eq("user_id", target_uid).execute()
+    
+    if res.data:
+        account_id = res.data[0].get("account_id")
+        
+        if account_id in ACTIVE_CLIENTS:
+            try:
+                await ACTIVE_CLIENTS[account_id].disconnect()
+            except:
+                pass
+            del ACTIVE_CLIENTS[account_id]
+    
+    supabase.table("user_bots").delete().eq("user_id", target_uid).execute()
+    supabase.table("subscriptions").delete().eq("user_id", target_uid).execute()
+    
+    await callback.answer("تم الحذف")
+    await dev_list_users(callback)
+
+# ==================== باقي الأزرار ====================
+@dp.callback_query(F.data == "bot_instructions")
+async def bot_instructions(callback: types.CallbackQuery):
+    text = "التعليمات:\n\n- غنيلي - شعر - مزج - ميمز - قرآن\n- يوت اسم الأغنية\n- كتم - فك كتم\n- حظر - فك حظر"
+    kb = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="🔙 رجوع", callback_data="main_menu")]
+    ])
+    await callback.message.edit_text(text, reply_markup=kb)
+    await callback.answer()
+
+@dp.callback_query(F.data == "my_settings")
+async def settings_menu(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    res = supabase.table("user_bots").select("*").or_(f"user_id.eq.{user_id},account_id.eq.{user_id}").execute()
+    
+    if not res.data:
+        await callback.message.answer("لم تقم بالتنصيب")
+        await callback.answer()
+        return
+    
+    markup = get_control_panel_keyboard(res.data[0])
+    await callback.message.edit_text("لوحة التحكم:", reply_markup=markup)
+    await callback.answer()
+
+@dp.callback_query(F.data == "main_menu")
+async def back_to_main(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    await callback.message.edit_text("القائمة الرئيسية:", reply_markup=get_main_menu_keyboard(user_id))
+    await callback.answer()
+
+@dp.callback_query(F.data == "refresh_bot")
+async def refresh_bot(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    
+    res = supabase.table("user_bots").select("*").or_(f"user_id.eq.{user_id},account_id.eq.{user_id}").execute()
+    
+    if res.data:
+        bot_info = res.data[0]
+        account_id = bot_info.get("account_id")
+        
+        if account_id in ACTIVE_CLIENTS:
+            try:
+                await ACTIVE_CLIENTS[account_id].disconnect()
+            except:
+                pass
+            del ACTIVE_CLIENTS[account_id]
+        
+        if bot_info.get("session_string"):
+            supabase.table("user_bots").update({"is_active": True}).or_(f"user_id.eq.{user_id},account_id.eq.{user_id}").execute()
+            asyncio.create_task(start_userbot(bot_info["session_string"], account_id))
+            await callback.answer("تم التحديث")
+        
+        await settings_menu(callback)
+
+# ==================== تشغيل اليوزربوت - لا يتوقف أبد ====================
 async def start_userbot(session_str, client_id):
-    """تشغيل اليوزربوت مع إعادة تشغيل تلقائي مستمر"""
+    """تشغيل مع إعادة تلقائية مستمرة"""
     while True:
         client = None
         try:
@@ -731,11 +865,9 @@ async def start_userbot(session_str, client_id):
             await client.start()
             ACTIVE_CLIENTS[client_id] = client
             
-            # تحميل المحتوى
             for cat, chan in CHANNELS_MAP.items():
                 asyncio.create_task(load_channel_messages(client, chan, cat, client_id))
 
-            # تحميل المكتمين والمحظورين
             try:
                 res_muted = supabase.table("muted_users").select("*").eq("user_id", client_id).execute()
                 if res_muted.data:
@@ -753,7 +885,6 @@ async def start_userbot(session_str, client_id):
             asyncio.create_task(update_name_with_clock(client, client_id))
             asyncio.create_task(auto_publish_loop(client, client_id))
 
-            # إنشاء قناة الأرشيف
             archive_channel = None
             try:
                 dialogs = await client.get_dialogs()
@@ -765,7 +896,7 @@ async def start_userbot(session_str, client_id):
                 if not archive_channel:
                     result = await client(functions.channels.CreateChannelRequest(
                         title="ارشيف الرسائل",
-                        about="قناة ارشيف رسائل الخاص"
+                        about="ارشيف"
                     ))
                     archive_channel = result.chats[0]
             except:
@@ -806,7 +937,6 @@ async def start_userbot(session_str, client_id):
                     
                     bot_config = res.data[0]
 
-                    # حفظ الوسائط الوقتية
                     if bot_config.get("save_media_enabled", True) and event.message.media:
                         msg_media = event.message.media
                         
@@ -843,19 +973,17 @@ async def start_userbot(session_str, client_id):
                             except:
                                 pass
 
-                    # أرشفة
                     if archive_channel:
                         try:
                             await client.forward_messages(archive_channel, event.message)
                         except:
                             pass
 
-                    # الرد التلقائي
                     auto_rep = bot_config.get("auto_reply_text")
                     if auto_rep:
                         await event.reply(auto_rep)
                         
-                except Exception as ex:
+                except:
                     pass
 
             @client.on(events.NewMessage(incoming=True))
@@ -865,7 +993,6 @@ async def start_userbot(session_str, client_id):
                     text_raw = event.raw_text.strip() if event.raw_text else ""
                     text_lower = text_raw.lower()
                     
-                    # منع التكرار
                     msg_key = f"{client_id}_{event.message.id}"
                     if msg_key in PROCESSED_MESSAGES:
                         return
@@ -879,7 +1006,6 @@ async def start_userbot(session_str, client_id):
                         if not is_admin:
                             return
 
-                    # كتم
                     if text_raw == "كتم":
                         try:
                             if is_private:
@@ -908,7 +1034,6 @@ async def start_userbot(session_str, client_id):
                             pass
                         return
 
-                    # فك كتم
                     if text_raw == "فك كتم":
                         try:
                             if is_private:
@@ -918,19 +1043,18 @@ async def start_userbot(session_str, client_id):
                                     if chat_id in MUTED_USERS_CACHE[client_id]:
                                         MUTED_USERS_CACHE[client_id].remove(chat_id)
                                         supabase.table("muted_users").delete().eq("user_id", client_id).eq("muted_user_id", chat_id).execute()
-                                        await event.respond("تم فك كتم المستخدم")
+                                        await event.respond("تم فك الكتم")
                                 else:
                                     if event.reply_to_msg_id:
                                         replied = await event.get_reply_message()
                                         if replied and replied.sender_id in MUTED_USERS_CACHE[client_id]:
                                             MUTED_USERS_CACHE[client_id].remove(replied.sender_id)
                                             supabase.table("muted_users").delete().eq("user_id", client_id).eq("muted_user_id", replied.sender_id).execute()
-                                            await event.respond("تم فك كتم المستخدم")
+                                            await event.respond("تم فك الكتم")
                         except:
                             pass
                         return
 
-                    # حظر
                     if text_raw == "حظر":
                         try:
                             if is_private:
@@ -944,7 +1068,7 @@ async def start_userbot(session_str, client_id):
                                     "user_id": client_id,
                                     "banned_user_id": chat_id
                                 }, on_conflict="user_id,banned_user_id").execute()
-                                await event.respond("تم حظر المستخدم")
+                                await event.respond("تم الحظر")
                             else:
                                 if event.reply_to_msg_id:
                                     replied = await event.get_reply_message()
@@ -954,12 +1078,11 @@ async def start_userbot(session_str, client_id):
                                             "user_id": client_id,
                                             "banned_user_id": replied.sender_id
                                         }, on_conflict="user_id,banned_user_id").execute()
-                                        await event.respond("تم حظر المستخدم")
+                                        await event.respond("تم الحظر")
                         except:
                             pass
                         return
 
-                    # فك حظر
                     if text_raw == "فك حظر":
                         try:
                             if is_private:
@@ -969,19 +1092,18 @@ async def start_userbot(session_str, client_id):
                                     if chat_id in BANNED_USERS_CACHE[client_id]:
                                         BANNED_USERS_CACHE[client_id].remove(chat_id)
                                         supabase.table("banned_users").delete().eq("user_id", client_id).eq("banned_user_id", chat_id).execute()
-                                        await event.respond("تم فك حظر المستخدم")
+                                        await event.respond("تم فك الحظر")
                                 else:
                                     if event.reply_to_msg_id:
                                         replied = await event.get_reply_message()
                                         if replied and replied.sender_id in BANNED_USERS_CACHE[client_id]:
                                             BANNED_USERS_CACHE[client_id].remove(replied.sender_id)
                                             supabase.table("banned_users").delete().eq("user_id", client_id).eq("banned_user_id", replied.sender_id).execute()
-                                            await event.respond("تم فك حظر المستخدم")
+                                            await event.respond("تم فك الحظر")
                         except:
                             pass
                         return
 
-                    # محتوى
                     matched_cmd = None
                     for cmd in CHANNELS_MAP.keys():
                         if text_raw == cmd:
@@ -1007,7 +1129,6 @@ async def start_userbot(session_str, client_id):
                                 pass
                         return
 
-                    # يوتيوب
                     if text_lower.startswith("يوت ") or text_lower.startswith("يوتو "):
                         query = text_raw[4:].strip() if text_lower.startswith("يوت ") else text_raw[5:].strip()
                         if not query:
@@ -1039,7 +1160,7 @@ async def start_userbot(session_str, client_id):
                             pass
                         return
 
-                except Exception as ex:
+                except:
                     pass
 
             await client.run_until_disconnected()
