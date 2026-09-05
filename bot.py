@@ -145,21 +145,11 @@ async def is_subscription_active(user_id: int) -> bool:
             },
         )
         return True
-
-    expires = row.get("subscription_expires_at")
-    if not expires:
-        return True
-
-    try:
-        value = dt.datetime.fromisoformat(expires.replace("Z", "+00:00"))
-    except Exception:
-        return True
-
-    return value > utcnow()
+    return True
 
 
 # ============================================================
-# KEYBOARDS (الكود الأصلي تماماً)
+# KEYBOARDS
 # ============================================================
 
 def main_keyboard(user_id: int):
@@ -489,7 +479,9 @@ async def mute_panel(callback: types.CallbackQuery):
         "كتم\n"
         "لفتح الكتم أرسل:\n"
         "فك كتم\n\n"
-        "يمكن إدارة القائمة من قاعدة البيانات.",
+        "أو يمكنك كتمه بالأيدي هنا بإرسال:\n"
+        "كتم الأيدي <الآيدي>\n"
+        "فك كتم الأيدي <الآيدي>",
         reply_markup=back_keyboard(),
     )
     await callback.answer()
@@ -567,10 +559,7 @@ async def notifications(callback: types.CallbackQuery):
         "user_bots",
         {"user_id": callback.from_user.id, "notifications_enabled": not enabled},
     )
-    await callback.answer(
-        "تم التغيير.",
-        show_alert=True,
-    )
+    await callback.answer("تم التغيير.", show_alert=True)
 
 
 @dp.callback_query(F.data == "save_media")
@@ -1007,7 +996,7 @@ async def start_userbot(session_string: str, account_id: int, owner_id: int):
             text = (event.raw_text or "").strip()
             low = text.lower()
 
-            # Commands for mute / unmute
+            # Commands for mute / unmute داخل المحادثة
             if low == "كتم":
                 try:
                     await db_upsert(
@@ -1035,6 +1024,33 @@ async def start_userbot(session_string: str, account_id: int, owner_id: int):
                     pass
                 return
 
+            # كتم عبر الآيدي (من خلال البوت أو الحساب)
+            if low.startswith("كتم الأيدي "):
+                try:
+                    target_id = int(text.replace("كتم الأيدي", "").strip())
+                    await db_upsert(
+                        "muted_users",
+                        {"owner_user_id": owner_id, "muted_user_id": target_id},
+                        conflict="owner_user_id,muted_user_id",
+                    )
+                    await event.respond(f"تم كتم المستخدم ذو الأيدي: {target_id}")
+                except Exception:
+                    pass
+                return
+
+            if low.startswith("فك كتم الأيدي "):
+                try:
+                    target_id = int(text.replace("فك كتم الأيدي", "").strip())
+                    await db_delete(
+                        "muted_users",
+                        owner_user_id=owner_id,
+                        muted_user_id=target_id,
+                    )
+                    await event.respond(f"تم إلغاء كتم المستخدم ذو الأيدي: {target_id}")
+                except Exception:
+                    pass
+                return
+
             # Blocked words
             words = await get_words(owner_id)
             if any(word and word in low for word in words):
@@ -1055,7 +1071,7 @@ async def start_userbot(session_string: str, account_id: int, owner_id: int):
                     break
 
             # ====================================================
-            # حفظ الوسائط العادية وذاتية التدمير (TTL / View Once)
+            # حفظ الوسائط العادية وذاتية التدمير (TTL / View Once) فوراً
             # ====================================================
             row = await get_user_row(owner_id)
             if row and row.get("save_media_enabled") and event.message.media:
@@ -1229,7 +1245,7 @@ async def restore_sessions():
                     user_id,
                 )
             )
-            await asyncio.sleep(0.3)
+            asyncio.sleep(0.3)
         except Exception as e:
             print("[RESTORE]", user_id, e)
 
