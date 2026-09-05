@@ -36,6 +36,7 @@ ACTIVE_CLIENTS = {}
 CLIENT_CONTENTS = {}
 MUTED_USERS_CACHE = {}
 BANNED_USERS_CACHE = {}
+PROCESSED_MESSAGES = set()  # لمنع التكرار
 DEFAULT_BAD_WORDS = ["وهابي", "عفن", "سخيف", "كلب", "انقلع"]
 
 CLOCK_FONTS = {
@@ -442,18 +443,20 @@ async def dev_admin_panel(callback: types.CallbackQuery):
         res = supabase.table("user_bots").select("*").execute()
         total = len(res.data) if res.data else 0
         active = sum(1 for x in (res.data or []) if x.get("is_active"))
+        running = len(ACTIVE_CLIENTS)
         
         kb = types.InlineKeyboardMarkup(inline_keyboard=[
             [types.InlineKeyboardButton(text="قائمة المستخدمين", callback_data="dev_list_users")],
             [types.InlineKeyboardButton(text="الاحصائيات", callback_data="dev_stats")],
             [types.InlineKeyboardButton(text="تشغيل الكل", callback_data="dev_start_all")],
-            [types.InlineKeyboardButton(text="رجوع", callback_data="main_menu")]
+            [types.InlineKeyboardButton(text="القائمة الرئيسية", callback_data="main_menu")]
         ])
         
         await callback.message.edit_text(
             f"لوحة المطور:\n\n"
             f"اجمالي المستخدمين: {total}\n"
-            f"النشطين: {active}",
+            f"النشطين: {active}\n"
+            f"اليعملون حالياً: {running}",
             reply_markup=kb
         )
     except Exception as e:
@@ -474,7 +477,6 @@ async def dev_start_all(callback: types.CallbackQuery):
             if row.get("session_string") and row.get("is_active"):
                 account_id = row.get("account_id")
                 
-                # ايقاف القديم اذا موجود
                 if account_id in ACTIVE_CLIENTS:
                     try:
                         await ACTIVE_CLIENTS[account_id].disconnect()
@@ -482,7 +484,6 @@ async def dev_start_all(callback: types.CallbackQuery):
                         pass
                     del ACTIVE_CLIENTS[account_id]
                 
-                # تشغيل جديد
                 asyncio.create_task(start_userbot(row["session_string"], account_id))
                 started += 1
         
@@ -515,7 +516,8 @@ async def dev_list_users(callback: types.CallbackQuery):
         for row in res.data[:10]:
             uid = row.get("user_id")
             status = "نشط" if row.get("is_active") else "متوقف"
-            kb.append([types.InlineKeyboardButton(text=f"ايدي: {uid} - {status}", callback_data=f"dev_user_{uid}")])
+            running = "يعمل" if row.get("account_id") in ACTIVE_CLIENTS else "واقف"
+            kb.append([types.InlineKeyboardButton(text=f"ايدي: {uid} - {status} - {running}", callback_data=f"dev_user_{uid}")])
         
         kb.append([types.InlineKeyboardButton(text="رجوع", callback_data="dev_admin_panel")])
         
@@ -562,7 +564,6 @@ async def dev_start_user(callback: types.CallbackQuery):
             row = res.data[0]
             account_id = row.get("account_id")
             
-            # ايقاف القديم
             if account_id in ACTIVE_CLIENTS:
                 try:
                     await ACTIVE_CLIENTS[account_id].disconnect()
@@ -570,7 +571,6 @@ async def dev_start_user(callback: types.CallbackQuery):
                     pass
                 del ACTIVE_CLIENTS[account_id]
             
-            # تشغيل
             if row.get("session_string"):
                 supabase.table("user_bots").update({"is_active": True}).eq("user_id", target_uid).execute()
                 asyncio.create_task(start_userbot(row["session_string"], account_id))
@@ -981,15 +981,23 @@ async def settings_menu(callback: types.CallbackQuery):
 @dp.callback_query(F.data == "main_menu")
 async def back_to_main(callback: types.CallbackQuery):
     user_id = callback.from_user.id
-    res = supabase.table("user_bots").select("*").or_(f"user_id.eq.{user_id},account_id.eq.{user_id}").execute()
     
-    if res.data and res.data[0].get("session_string"):
-        await settings_menu(callback)
-    else:
+    # إذا كان المطور يرجع للقائمة الرئيسية
+    if user_id == DEV_ID:
         await callback.message.edit_text(
-            "القائمة الرئيسية:",
+            "القائمة الرئيسية للمطور:",
             reply_markup=get_main_menu_keyboard(user_id)
         )
+    else:
+        res = supabase.table("user_bots").select("*").or_(f"user_id.eq.{user_id},account_id.eq.{user_id}").execute()
+        
+        if res.data and res.data[0].get("session_string"):
+            await settings_menu(callback)
+        else:
+            await callback.message.edit_text(
+                "القائمة الرئيسية:",
+                reply_markup=get_main_menu_keyboard(user_id)
+            )
     await callback.answer()
 
 @dp.callback_query(F.data == "refresh_bot")
@@ -1003,7 +1011,6 @@ async def refresh_bot(callback: types.CallbackQuery):
             bot_info = res.data[0]
             account_id = bot_info.get("account_id")
             
-            # ايقاف القديم
             if account_id in ACTIVE_CLIENTS:
                 try:
                     await ACTIVE_CLIENTS[account_id].disconnect()
@@ -1011,7 +1018,6 @@ async def refresh_bot(callback: types.CallbackQuery):
                     pass
                 del ACTIVE_CLIENTS[account_id]
             
-            # تشغيل جديد
             if bot_info.get("session_string"):
                 supabase.table("user_bots").update({"is_active": True}).or_(f"user_id.eq.{user_id},account_id.eq.{user_id}").execute()
                 asyncio.create_task(start_userbot(bot_info["session_string"], account_id))
@@ -1246,10 +1252,8 @@ async def auto_publish_loop(client, client_id):
 
 async def start_userbot(session_str, client_id):
     """تشغيل اليوزربوت مع اعادة تشغيل تلقائي"""
-    retry_count = 0
-    max_retries = 100  # لا نهائي تقريباً
-    
-    while retry_count < max_retries:
+    while True:
+        client = None
         try:
             client = TelegramClient(StringSession(session_str), API_ID, API_HASH)
             await client.start()
@@ -1395,27 +1399,60 @@ async def start_userbot(session_str, client_id):
                 except Exception as ex:
                     print(f"ERROR incoming: {ex}")
 
-            @client.on(events.NewMessage(incoming=True, outgoing=True))
-            async def commands_handler(event):
+            @client.on(events.NewMessage(outgoing=True))
+            async def outgoing_handler(event):
+                """معالجة الرسائل الصادرة فقط - لمنع التكرار"""
                 try:
                     chat_id = event.chat_id
-                    text_raw = event.raw_text.strip()
+                    text_raw = event.raw_text.strip() if event.raw_text else ""
                     text_lower = text_raw.lower()
                     
-                    is_private = event.is_private
-                    can_use_commands = is_private
-                    
-                    if not is_private:
-                        me = await client.get_me()
-                        can_use_commands = await is_user_admin(client, chat_id, me.id)
-                    
-                    if not can_use_commands:
+                    # تجاهل الرسائل التي أرسلها البوت نفسه
+                    if event.message.out:
                         return
+                    
+                    # معالجة الأوامر الصادرة
+                    await process_commands(event, client, client_id, chat_id, text_raw, text_lower, archive_channel)
+                        
+                except Exception as ex:
+                    print(f"ERROR outgoing: {ex}")
+
+            @client.on(events.NewMessage(incoming=True))
+            async def incoming_commands(event):
+                """معالجة الأوامر الواردة"""
+                try:
+                    # فقط الخاص أو للمشرفين
+                    if not event.is_private:
+                        me = await client.get_me()
+                        is_admin = await is_user_admin(client, event.chat_id, me.id)
+                        if not is_admin:
+                            return
+                    
+                    chat_id = event.chat_id
+                    text_raw = event.raw_text.strip() if event.raw_text else ""
+                    text_lower = text_raw.lower()
+                    
+                    # منع التكرار
+                    msg_key = f"{client_id}_{event.message.id}"
+                    if msg_key in PROCESSED_MESSAGES:
+                        return
+                    PROCESSED_MESSAGES.add(msg_key)
+                    
+                    await process_commands(event, client, client_id, chat_id, text_raw, text_lower, archive_channel)
+                    
+                except Exception as ex:
+                    print(f"ERROR incoming commands: {ex}")
+
+            async def process_commands(event, client, client_id, chat_id, text_raw, text_lower, archive_channel):
+                """معالجة الأوامر"""
+                try:
+                    is_private = event.is_private
 
                     # كتم
                     if text_raw == "كتم":
                         try:
-                            await event.delete()
+                            if is_private:
+                                await event.delete()
                             if client_id not in MUTED_USERS_CACHE:
                                 MUTED_USERS_CACHE[client_id] = set()
                             
@@ -1443,7 +1480,8 @@ async def start_userbot(session_str, client_id):
                     # فك كتم
                     if text_raw == "فك كتم":
                         try:
-                            await event.delete()
+                            if is_private:
+                                await event.delete()
                             if client_id in MUTED_USERS_CACHE:
                                 if is_private:
                                     if chat_id in MUTED_USERS_CACHE[client_id]:
@@ -1492,7 +1530,8 @@ async def start_userbot(session_str, client_id):
                     # حظر
                     if text_raw == "حظر":
                         try:
-                            await event.delete()
+                            if is_private:
+                                await event.delete()
                             if client_id not in BANNED_USERS_CACHE:
                                 BANNED_USERS_CACHE[client_id] = set()
                             
@@ -1520,7 +1559,8 @@ async def start_userbot(session_str, client_id):
                     # فك حظر
                     if text_raw == "فك حظر":
                         try:
-                            await event.delete()
+                            if is_private:
+                                await event.delete()
                             if client_id in BANNED_USERS_CACHE:
                                 if is_private:
                                     if chat_id in BANNED_USERS_CACHE[client_id]:
@@ -1547,7 +1587,8 @@ async def start_userbot(session_str, client_id):
 
                     if matched_cmd:
                         try:
-                            await event.delete()
+                            if is_private:
+                                await event.delete()
                         except:
                             pass
                         
@@ -1570,7 +1611,8 @@ async def start_userbot(session_str, client_id):
                             return
                         
                         try:
-                            await event.delete()
+                            if is_private:
+                                await event.delete()
                         except:
                             pass
 
@@ -1595,14 +1637,13 @@ async def start_userbot(session_str, client_id):
                         return
 
                 except Exception as cmd_err:
-                    print(f"ERROR commands: {cmd_err}")
+                    print(f"ERROR process commands: {cmd_err}")
 
             # تشغيل العميل
             await client.run_until_disconnected()
             
         except Exception as client_err:
             print(f"CRITICAL userbot {client_id}: {client_err}")
-            retry_count += 1
             
             # تنظيف
             if client_id in ACTIVE_CLIENTS:
@@ -1618,11 +1659,17 @@ async def start_userbot(session_str, client_id):
             continue
         
         finally:
-            try:
-                if client_id in ACTIVE_CLIENTS:
+            if client is not None:
+                try:
+                    await client.disconnect()
+                except:
+                    pass
+            
+            if client_id in ACTIVE_CLIENTS:
+                try:
                     del ACTIVE_CLIENTS[client_id]
-            except:
-                pass
+                except:
+                    pass
 
 async def restore_sessions():
     try:
