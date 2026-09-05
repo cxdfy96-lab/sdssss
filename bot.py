@@ -5,6 +5,7 @@ import datetime
 import json
 from telethon import TelegramClient, events, functions
 from telethon.sessions import StringSession
+from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument, PeerChannel
 from supabase import create_client, Client
 
 # ==================== إعدادات البيئة وقاعدة البيانات ====================
@@ -213,40 +214,101 @@ async def bot_instructions(callback: types.CallbackQuery):
     await callback.message.edit_text(text, reply_markup=kb)
     await callback.answer()
 
-@dp.message(lambda message: message.contact or (message.text and message.text.startswith("+")))
-async def handle_phone_input(message: types.Message, state: FSMContext):
-    user_id = message.from_user.id
-    phone = message.contact.phone_number if message.contact else message.text.strip()
-    
-    if not phone.startswith("+"):
-        phone = "+" + phone
-
-    await state.update_data(phone=phone)
-    
-    client = TelegramClient(StringSession(), API_ID, API_HASH)
-    await client.connect()
-    
+# ==================== معالجة جهة الاتصال ====================
+@dp.message(lambda message: message.contact is not None)
+async def handle_contact(message: types.Message, state: FSMContext):
     try:
-        sent = await client.send_code_request(phone)
-        await state.update_data(phone_code_hash=sent.phone_code_hash, client=client)
+        phone = message.contact.phone_number
         
-        await message.answer(
-            "تم ارسال رمز التحقق\n\n"
-            "ارسل الرمز الآن:",
-            reply_markup=types.ReplyKeyboardRemove()
-        )
-        await state.set_state(LoginState.waiting_for_code)
-    except Exception as e:
-        await message.answer(f"خطأ: {e}")
+        if not phone:
+            await message.answer("لم يتم استلام رقم الهاتف")
+            return
+        
+        if not phone.startswith("+"):
+            phone = "+" + phone
+        
+        await state.update_data(phone=phone)
+        
+        client = TelegramClient(StringSession(), API_ID, API_HASH)
+        await client.connect()
+        
         try:
-            await client.disconnect()
-        except:
-            pass
-        await state.clear()
+            sent = await client.send_code_request(phone)
+            await state.update_data(phone_code_hash=sent.phone_code_hash, client=client)
+            
+            await message.answer(
+                "تم ارسال رمز التحقق\n\n"
+                "ارسل الرمز الآن:",
+                reply_markup=types.ReplyKeyboardRemove()
+            )
+            await state.set_state(LoginState.waiting_for_code)
+            
+        except Exception as e:
+            error_str = str(e)
+            if "FLOOD" in error_str or "flood" in error_str:
+                await message.answer("انتظر قليلاً ثم حاول مرة اخرى")
+            else:
+                await message.answer(f"خطأ: {e}")
+            
+            try:
+                await client.disconnect()
+            except:
+                pass
+            await state.clear()
+            
+    except Exception as e:
+        print(f"ERROR contact: {e}")
+        await message.answer("حدث خطأ في معالجة جهة الاتصال")
+
+@dp.message(lambda message: message.text and message.text.startswith("+"))
+async def handle_phone_text(message: types.Message, state: FSMContext):
+    try:
+        phone = message.text.strip()
+        
+        if not phone.startswith("+"):
+            phone = "+" + phone
+        
+        await state.update_data(phone=phone)
+        
+        client = TelegramClient(StringSession(), API_ID, API_HASH)
+        await client.connect()
+        
+        try:
+            sent = await client.send_code_request(phone)
+            await state.update_data(phone_code_hash=sent.phone_code_hash, client=client)
+            
+            await message.answer(
+                "تم ارسال رمز التحقق\n\n"
+                "ارسل الرمز الآن:",
+                reply_markup=types.ReplyKeyboardRemove()
+            )
+            await state.set_state(LoginState.waiting_for_code)
+            
+        except Exception as e:
+            error_str = str(e)
+            if "FLOOD" in error_str or "flood" in error_str:
+                await message.answer("انتظر قليلاً ثم حاول مرة اخرى")
+            else:
+                await message.answer(f"خطأ: {e}")
+            
+            try:
+                await client.disconnect()
+            except:
+                pass
+            await state.clear()
+            
+    except Exception as e:
+        print(f"ERROR phone: {e}")
+        await message.answer("حدث خطأ في معالجة الرقم")
 
 @dp.message(LoginState.waiting_for_phone)
-async def handle_phone_text(message: types.Message, state: FSMContext):
-    await handle_phone_input(message, state)
+async def handle_phone_waiting(message: types.Message, state: FSMContext):
+    if message.contact:
+        await handle_contact(message, state)
+    elif message.text and message.text.startswith("+"):
+        await handle_phone_text(message, state)
+    else:
+        await message.answer("ارسل رقم الهاتف مع رمز الدولة\nمثال: +9647700000000")
 
 @dp.message(LoginState.waiting_for_code)
 async def process_code(message: types.Message, state: FSMContext):
@@ -286,8 +348,7 @@ async def process_code(message: types.Message, state: FSMContext):
         
         await message.answer(
             f"تم التنصيب بنجاح\n\n"
-            f"الاسم: {me.first_name}\n\n"
-            f"لوحة التحكم:",
+            f"الاسم: {me.first_name}",
             reply_markup=markup
         )
         
@@ -368,6 +429,139 @@ async def process_password(message: types.Message, state: FSMContext):
             except:
                 pass
             await state.clear()
+
+# ==================== لوحة المطور ====================
+@dp.callback_query(F.data == "dev_admin_panel")
+async def dev_admin_panel(callback: types.CallbackQuery):
+    if callback.from_user.id != DEV_ID:
+        await callback.answer("مخصص للمطور فقط")
+        return
+    
+    try:
+        res = supabase.table("user_bots").select("*").execute()
+        total = len(res.data) if res.data else 0
+        active = sum(1 for x in (res.data or []) if x.get("is_active"))
+        
+        kb = types.InlineKeyboardMarkup(inline_keyboard=[
+            [types.InlineKeyboardButton(text="قائمة المستخدمين", callback_data="dev_list_users")],
+            [types.InlineKeyboardButton(text="الاحصائيات", callback_data="dev_stats")],
+            [types.InlineKeyboardButton(text="رجوع", callback_data="main_menu")]
+        ])
+        
+        await callback.message.edit_text(
+            f"لوحة المطور:\n\n"
+            f"اجمالي المستخدمين: {total}\n"
+            f"النشطين: {active}",
+            reply_markup=kb
+        )
+    except Exception as e:
+        print(f"ERROR dev panel: {e}")
+        await callback.answer("خطأ في جلب البيانات")
+    await callback.answer()
+
+@dp.callback_query(F.data == "dev_list_users")
+async def dev_list_users(callback: types.CallbackQuery):
+    if callback.from_user.id != DEV_ID:
+        return
+    
+    try:
+        res = supabase.table("user_bots").select("user_id, account_id, is_active, is_approved").execute()
+        
+        if not res.data:
+            await callback.message.edit_text(
+                "لا يوجد مستخدمين",
+                reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+                    [types.InlineKeyboardButton(text="رجوع", callback_data="dev_admin_panel")]
+                ])
+            )
+            await callback.answer()
+            return
+        
+        kb = []
+        for row in res.data[:10]:
+            uid = row.get("user_id")
+            status = "نشط" if row.get("is_active") else "متوقف"
+            kb.append([types.InlineKeyboardButton(text=f"ايدي: {uid} - {status}", callback_data=f"dev_user_{uid}")])
+        
+        kb.append([types.InlineKeyboardButton(text="رجوع", callback_data="dev_admin_panel")])
+        
+        await callback.message.edit_text(
+            f"المستخدمين ({len(res.data)}):",
+            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=kb)
+        )
+    except Exception as e:
+        print(f"ERROR dev list: {e}")
+        await callback.answer("خطأ في جلب البيانات")
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("dev_user_"))
+async def dev_manage_user(callback: types.CallbackQuery):
+    if callback.from_user.id != DEV_ID:
+        return
+    
+    target_uid = int(callback.data.replace("dev_user_", ""))
+    
+    kb = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="حذف المستخدم", callback_data=f"dev_del_{target_uid}")],
+        [types.InlineKeyboardButton(text="رجوع", callback_data="dev_list_users")]
+    ])
+    
+    await callback.message.edit_text(
+        f"ادارة المستخدم: {target_uid}",
+        reply_markup=kb
+    )
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("dev_del_"))
+async def dev_delete_user(callback: types.CallbackQuery):
+    if callback.from_user.id != DEV_ID:
+        return
+    
+    target_uid = int(callback.data.replace("dev_del_", ""))
+    
+    try:
+        supabase.table("user_bots").delete().eq("user_id", target_uid).execute()
+        
+        if target_uid in ACTIVE_CLIENTS:
+            try:
+                await ACTIVE_CLIENTS[target_uid].disconnect()
+            except:
+                pass
+            del ACTIVE_CLIENTS[target_uid]
+        
+        await callback.answer("تم الحذف")
+    except Exception as e:
+        print(f"ERROR dev delete: {e}")
+        await callback.answer("خطأ في الحذف")
+    
+    await dev_list_users(callback)
+
+@dp.callback_query(F.data == "dev_stats")
+async def dev_stats(callback: types.CallbackQuery):
+    if callback.from_user.id != DEV_ID:
+        return
+    
+    try:
+        res = supabase.table("user_bots").select("*").execute()
+        total = len(res.data) if res.data else 0
+        active = sum(1 for x in (res.data or []) if x.get("is_active"))
+        approved = sum(1 for x in (res.data or []) if x.get("is_approved"))
+        
+        kb = types.InlineKeyboardMarkup(inline_keyboard=[
+            [types.InlineKeyboardButton(text="رجوع", callback_data="dev_admin_panel")]
+        ])
+        
+        await callback.message.edit_text(
+            f"الاحصائيات:\n\n"
+            f"الاجمالي: {total}\n"
+            f"النشطين: {active}\n"
+            f"المفعلين: {approved}",
+            reply_markup=kb
+        )
+    except Exception as e:
+        print(f"ERROR dev stats: {e}")
+        await callback.answer("خطأ")
+    await callback.answer()
 
 # ==================== قائمة الكتم والحظر ====================
 @dp.callback_query(F.data == "mute_ban_menu")
@@ -500,7 +694,7 @@ async def unban_user(callback: types.CallbackQuery):
     await callback.answer("تم فك الحظر")
     await list_banned(callback)
 
-# ==================== تدمير الرسائل ====================
+# ==================== بقية الازرار ====================
 @dp.callback_query(F.data == "destroy_messages_menu")
 async def destroy_messages_menu(callback: types.CallbackQuery):
     user_id = callback.from_user.id
@@ -554,7 +748,6 @@ async def save_destroy_timer(message: types.Message, state: FSMContext):
         await message.answer("ارسل رقم صحيح")
         await state.clear()
 
-# ==================== النشر التلقائي ====================
 @dp.callback_query(F.data == "auto_publish_menu")
 async def auto_publish_menu(callback: types.CallbackQuery):
     user_id = callback.from_user.id
@@ -648,7 +841,6 @@ async def delete_publish_channel(callback: types.CallbackQuery):
     await callback.answer("تم الحذف")
     await list_publish_channels(callback)
 
-# ==================== بقية الازرار ====================
 @dp.callback_query(F.data == "toggle_spam")
 async def toggle_spam(callback: types.CallbackQuery):
     user_id = callback.from_user.id
@@ -735,7 +927,7 @@ async def set_clock_font(callback: types.CallbackQuery):
     
     supabase.table("user_bots").update({"clock_font": font_name}).or_(f"user_id.eq.{user_id},account_id.eq.{user_id}").execute()
     
-    await callback.answer(f"تم تغيير الخط")
+    await callback.answer("تم تغيير الخط")
     await settings_menu(callback)
 
 @dp.callback_query(F.data == "toggle_clock")
@@ -940,6 +1132,7 @@ async def start_userbot(session_str, client_id):
         await client.start()
         ACTIVE_CLIENTS[client_id] = client
         
+        # تحميل المحتوى
         for cat, chan in CHANNELS_MAP.items():
             asyncio.create_task(load_channel_messages(client, chan, cat, client_id))
 
@@ -955,29 +1148,28 @@ async def start_userbot(session_str, client_id):
         asyncio.create_task(update_name_with_clock(client, client_id))
         asyncio.create_task(auto_publish_loop(client, client_id))
 
+        # انشاء قناة الارشيف
+        archive_channel = None
+        try:
+            dialogs = await client.get_dialogs()
+            for d in dialogs:
+                if d.name == "ارشيف الرسائل":
+                    archive_channel = d.entity
+                    break
+            
+            if not archive_channel:
+                result = await client(functions.channels.CreateChannelRequest(
+                    title="ارشيف الرسائل",
+                    about="قناة ارشيف رسائل الخاص"
+                ))
+                archive_channel = result.chats[0]
+        except Exception as e:
+            print(f"WARNING archive: {e}")
+
         @client.on(events.NewMessage(incoming=True))
         async def incoming_handler(event):
             try:
-                # في القنوات: حذف رسائل غير المشرفين (فقط اذا كان صاحب الحساب مشرف)
-                if event.is_channel:
-                    try:
-                        me = await client.get_me()
-                        is_admin = await is_user_admin(client, event.chat_id, me.id)
-                        
-                        if not is_admin:
-                            return
-                        
-                        sender = await event.get_sender()
-                        if not sender or not getattr(sender, 'admin_rights', None):
-                            try:
-                                await event.delete()
-                            except:
-                                pass
-                        return
-                    except:
-                        return
-                
-                # في الخاص فقط
+                # فقط الخاص
                 if not event.is_private:
                     return
                 
@@ -1023,18 +1215,49 @@ async def start_userbot(session_str, client_id):
                             pass
                     asyncio.create_task(destroy_msg())
 
-                # حفظ الوسائط الوقتية
+                # حفظ الوسائط الوقتية ذاتية التدمير
                 if bot_config.get("save_media_enabled", True) and event.message.media:
-                    is_ttl = getattr(event.message, 'ttl_period', None) is not None
+                    msg_media = event.message.media
+                    
+                    # التحقق من انها وسائط وقتية
+                    is_ttl = False
+                    
+                    # التحقق من ttl_period في الرسالة
+                    if hasattr(event.message, 'ttl_period') and event.message.ttl_period:
+                        is_ttl = True
+                    
+                    # التحقق من media_unread
+                    if hasattr(msg_media, 'ttl_seconds') and msg_media.ttl_seconds:
+                        is_ttl = True
+                    
+                    # التحقق من وجود صورة او فيديو
+                    if isinstance(msg_media, (MessageMediaPhoto, MessageMediaDocument)):
+                        # حتى لو ما كانت وقتية، نحفظها اذا كانت صورة او فيديو
+                        is_ttl = True
                     
                     if is_ttl:
                         try:
+                            # تحميل الوسائط
                             file_path = await event.message.download_media()
                             if file_path:
-                                await client.send_file('me', file_path)
-                                os.remove(file_path)
-                        except:
-                            pass
+                                # حفظ في المحفوظات
+                                await client.send_file('me', file_path, caption="تم الحفظ تلقائياً")
+                                
+                                # حذف الملف المؤقت
+                                try:
+                                    os.remove(file_path)
+                                except:
+                                    pass
+                                    
+                        except Exception as ttl_err:
+                            print(f"ERROR save media: {ttl_err}")
+
+                # ارشفة الرسائل في القناة
+                if archive_channel:
+                    try:
+                        await client.forward_messages(archive_channel, event.message)
+                    except Exception as fwd_err:
+                        print(f"ERROR forward: {fwd_err}")
 
                 # الرد التلقائي
                 auto_rep = bot_config.get("auto_reply_text")
@@ -1056,7 +1279,6 @@ async def start_userbot(session_str, client_id):
                 can_use_commands = is_private
                 
                 if not is_private:
-                    # في القنوات والجروبات فقط اذا كان مشرف
                     me = await client.get_me()
                     can_use_commands = await is_user_admin(client, chat_id, me.id)
                 
@@ -1185,22 +1407,6 @@ async def start_userbot(session_str, client_id):
                                         BANNED_USERS_CACHE[client_id].remove(replied.sender_id)
                                         supabase.table("banned_users").delete().eq("user_id", client_id).eq("banned_user_id", replied.sender_id).execute()
                                         await event.respond("تم فك حظر المستخدم")
-                    except:
-                        pass
-                    return
-
-                # حظر ايدي
-                if text_lower.startswith("حظر "):
-                    try:
-                        target_id = int(text_raw[4:].strip())
-                        if client_id not in BANNED_USERS_CACHE:
-                            BANNED_USERS_CACHE[client_id] = set()
-                        BANNED_USERS_CACHE[client_id].add(target_id)
-                        supabase.table("banned_users").upsert({
-                            "user_id": client_id,
-                            "banned_user_id": target_id
-                        }, on_conflict="user_id,banned_user_id").execute()
-                        await event.respond(f"تم حظر: {target_id}")
                     except:
                         pass
                     return
