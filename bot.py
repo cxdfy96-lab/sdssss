@@ -56,7 +56,6 @@ class LoginState(StatesGroup):
     waiting_for_code = State()
     waiting_for_password = State()
 
-# أزرار شفافة نظيفة بدون إيموجي ومطابقة للصور
 def get_main_menu_keyboard(user_id):
     kb = [
         [types.InlineKeyboardButton(text="طلب تنصيب حساب (15 نجمة/شهر)", callback_data="request_install")],
@@ -126,15 +125,20 @@ async def request_install(callback: types.CallbackQuery):
         await callback.message.answer("حدث خطأ أثناء إرسال الطلب للمطور.")
     await callback.answer()
 
-# معالجة الموافقة والتفعيل بدقة تامة
-@dp.callback_query(lambda c: c.data.startswith("approve_install_"))
+# === معالج زر الموافقة والتفعيل (مفصول ومباشر لضمان العمل الفوري) ===
+@dp.callback_query(lambda c: c.data and c.data.startswith("approve_install_"))
 async def admin_approve_action(callback: types.CallbackQuery):
     if callback.from_user.id != DEV_ID:
         await callback.answer("هذا الأمر للمطور فقط!", show_alert=True)
         return
     
-    target_user_id = int(callback.data.replace("approve_install_", ""))
+    try:
+        target_user_id = int(callback.data.replace("approve_install_", ""))
+    except ValueError:
+        await callback.answer("حدث خطأ في قراءة الأيدي.", show_alert=True)
+        return
     
+    # تحديث وتفعيل الحساب بقاعدة البيانات
     supabase.table("user_bots").upsert({
         "user_id": target_user_id,
         "is_approved": True,
@@ -147,21 +151,29 @@ async def admin_approve_action(callback: types.CallbackQuery):
             resize_keyboard=True,
             one_time_keyboard=True
         )
-        await bot.send_message(target_user_id, "تمت الموافقة من المطور بنجاح!\n\nاضغط على الزر أدناه لمشاركة رقم هاتفك وبدء التشغيل:", reply_markup=contact_kb)
+        await bot.send_message(
+            target_user_id, 
+            "تمت الموافقة من المطور بنجاح!\n\nاضغط على الزر أدناه لمشاركة رقم هاتفك وبدء التشغيل:", 
+            reply_markup=contact_kb
+        )
     except Exception as e:
-        print(f"[ERROR] إرسال زر مشاركة الرقم: {e}")
+        print(f"[ERROR] إرسال زر مشاركة الرقم للمستخدم: {e}")
         
     await callback.message.edit_text(f"تمت الموافقة وتفعيل الاشتراك للمستخدم {target_user_id} بنجاح.")
-    await callback.answer("تم تفعيل المستخدم بنجاح!", show_alert=True)
+    await callback.answer("تم التفعيل وإرسال زر مشاركة الهاتف للمستخدم!", show_alert=True)
 
-# معالجة الرفض
-@dp.callback_query(lambda c: c.data.startswith("reject_install_"))
+# === معالج زر الرفض ===
+@dp.callback_query(lambda c: c.data and c.data.startswith("reject_install_"))
 async def admin_reject_action(callback: types.CallbackQuery):
     if callback.from_user.id != DEV_ID:
         await callback.answer("هذا الأمر للمطور فقط!", show_alert=True)
         return
     
-    target_user_id = int(callback.data.replace("reject_install_", ""))
+    try:
+        target_user_id = int(callback.data.replace("reject_install_", ""))
+    except ValueError:
+        return
+
     try:
         await bot.send_message(target_user_id, "عذراً، تم رفض طلب التنصيب لعدم إتمام دفع النجوم.")
     except:
@@ -196,7 +208,7 @@ async def dev_admin_panel(callback: types.CallbackQuery):
     )
     await callback.answer()
 
-# أقسام التحكم
+# أقسام التحكم بالأزرار الشفافة
 @dp.callback_query(lambda c: c.data == "menu_mute")
 async def panel_mute(callback: types.CallbackQuery):
     text = "كتم الأشخاص\n\nيمكنك كتم اي شخص من خلال إرسال كلمة (كتم) له في الخاص.\n• حالة الكتم: مفعل"
@@ -311,8 +323,8 @@ async def panel_welcome(callback: types.CallbackQuery):
     await callback.message.edit_text(text, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=kb))
     await callback.answer()
 
-# معالج عام لباقي الأزرار البسيطة لتجنب الأخطاء
-@dp.callback_query(lambda c: c.data.startswith(("toggle_", "l_", "dest_", "font_", "clock_", "off_", "add_", "del_", "change_", "destroy_", "preview_", "set_", "wel_")))
+# معالج عام لباقي الأزرار البسيطة
+@dp.callback_query(lambda c: c.data and c.data.startswith(("toggle_", "l_", "dest_", "font_", "clock_", "off_", "add_", "del_", "change_", "destroy_", "preview_", "set_", "wel_")))
 async def quick_action_callback(callback: types.CallbackQuery):
     await callback.answer("تم تنفيذ وتطبيق الإجراء بنجاح!", show_alert=True)
 
