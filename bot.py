@@ -74,7 +74,6 @@ CLOCK_FONTS = {
 # ============================================================
 
 def normalize_code(text: str) -> str:
-    """Accept 12 345 / 12-345 / 12345 and return 12345."""
     return re.sub(r"[\s\-]", "", (text or "").strip())
 
 
@@ -132,17 +131,46 @@ async def get_user_row(user_id: int) -> Optional[dict]:
 
 async def is_subscription_active(user_id: int) -> bool:
     row = await get_user_row(user_id)
-    if not row or not row.get("is_active"):
-        return False
+    if not row:
+        # تفعيل الاشتراك المجاني تلقائياً لمدة شهر عند أول دخول
+        start = utcnow()
+        expires = add_month(start)
+        await db_upsert(
+            "user_bots",
+            {
+                "user_id": user_id,
+                "is_approved": True,
+                "subscription_status": "active",
+                "subscription_started_at": start.isoformat(),
+                "subscription_expires_at": expires.isoformat(),
+                "is_active": False,
+            },
+        )
+        return True
+
+    if not row.get("is_active") and not row.get("is_approved"):
+        start = utcnow()
+        expires = add_month(start)
+        await db_upsert(
+            "user_bots",
+            {
+                "user_id": user_id,
+                "is_approved": True,
+                "subscription_status": "active",
+                "subscription_started_at": start.isoformat(),
+                "subscription_expires_at": expires.isoformat(),
+            },
+        )
+        return True
 
     expires = row.get("subscription_expires_at")
     if not expires:
-        return False
+        return True
 
     try:
         value = dt.datetime.fromisoformat(expires.replace("Z", "+00:00"))
     except Exception:
-        return False
+        return True
 
     return value > utcnow()
 
@@ -154,7 +182,7 @@ async def is_subscription_active(user_id: int) -> bool:
 def main_keyboard(user_id: int):
     rows = [
         [
-            types.InlineKeyboardButton(text="الاشتراك", callback_data="subscription"),
+            types.InlineKeyboardButton(text="الاشتراك المجاني (تفعيل)", callback_data="subscription"),
             types.InlineKeyboardButton(text="التعليمات", callback_data="instructions"),
         ],
         [
@@ -227,8 +255,8 @@ class Form(StatesGroup):
 async def start(message: types.Message):
     await message.answer(
         "أهلاً بك في بوت إدارة الحساب.\n\n"
-        "الاشتراك الشهري: 15 نجمة.\n"
-        "بعد تأكيد الدفع من المطور يمكنك بدء تنصيب حسابك.",
+        "الاشتراك مجاني تماماً لمدة شهر!\n"
+        "يمكنك البدء فوراً بتنصيب حسابك.",
         reply_markup=main_keyboard(message.from_user.id),
     )
 
@@ -243,109 +271,14 @@ async def main_callback(callback: types.CallbackQuery):
 
 
 # ============================================================
-# MANUAL PAYMENT
+# FREE SUBSCRIPTION & DIRECT INSTALL
 # ============================================================
 
 @dp.callback_query(F.data == "subscription")
 async def subscription(callback: types.CallbackQuery):
-    row = await get_user_row(callback.from_user.id)
-    expires = row.get("subscription_expires_at") if row else None
-
-    text = (
-        "الاشتراك الشهري: 15 نجمة.\n\n"
-        f"المطور: {DEV_USER}\n\n"
-        "قم بتحويل النجوم للمطور يدويًا، وبعدها اضغط "
-        "\"أرسلت الدفع\". التحقق من وصول النجوم يتم يدويًا من المطور."
-    )
-
-    if expires:
-        text += f"\n\nتاريخ الانتهاء المسجل: {expires}"
-
-    kb = types.InlineKeyboardMarkup(
-        inline_keyboard=[
-            [types.InlineKeyboardButton(text="أرسلت الدفع", callback_data="payment_sent")],
-            [types.InlineKeyboardButton(text="رجوع", callback_data="main")],
-        ]
-    )
-    await callback.message.edit_text(text, reply_markup=kb)
-    await callback.answer()
-
-
-@dp.callback_query(F.data == "payment_sent")
-async def payment_sent(callback: types.CallbackQuery):
-    user = callback.from_user
-    payload = f"manual:{user.id}:{int(utcnow().timestamp())}"
-
-    await db_insert(
-        "payments",
-        {
-            "user_id": user.id,
-            "amount": 15,
-            "currency": "XTR",
-            "invoice_payload": payload,
-            "status": "waiting_manual_confirmation",
-        },
-    )
-
-    username = f"@{user.username}" if user.username else "لا يوجد"
-
-    kb = types.InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                types.InlineKeyboardButton(
-                    text="موافقة وتفعيل",
-                    callback_data=f"approve:{user.id}:{payload}",
-                ),
-                types.InlineKeyboardButton(
-                    text="رفض",
-                    callback_data=f"reject:{user.id}:{payload}",
-                ),
-            ]
-        ]
-    )
-
-    await bot.send_message(
-        DEV_ID,
-        "طلب دفع يدوي جديد.\n\n"
-        f"الاسم: {user.full_name}\n"
-        f"المعرف: {username}\n"
-        f"الأيدي: {user.id}\n"
-        "المبلغ: 15 ⭐\n\n"
-        "تحقق من وصول النجوم يدويًا قبل الموافقة.",
-        reply_markup=kb,
-    )
-
-    await callback.message.edit_text(
-        "تم إرسال طلبك للمطور.\n"
-        "بعد التأكد من وصول النجوم سيقوم المطور بتفعيل الاشتراك.",
-        reply_markup=back_keyboard(),
-    )
-    await callback.answer()
-
-
-@dp.callback_query(F.data.startswith("approve:"))
-async def approve_payment(callback: types.CallbackQuery):
-    if callback.from_user.id != DEV_ID:
-        await callback.answer("للمطور فقط.", show_alert=True)
-        return
-
-    _, user_id_s, payload = callback.data.split(":", 2)
-    user_id = int(user_id_s)
-
-    start = utcnow()
-    expires = add_month(start)
-
-    await db_update(
-        "payments",
-        {
-            "status": "paid_manual",
-            "approved_by": DEV_ID,
-            "approved_at": start.isoformat(),
-            "subscription_from": start.isoformat(),
-            "subscription_until": expires.isoformat(),
-        },
-        invoice_payload=payload,
-    )
+    user_id = callback.from_user.id
+    start_date = utcnow()
+    expires = add_month(start_date)
 
     await db_upsert(
         "user_bots",
@@ -353,56 +286,23 @@ async def approve_payment(callback: types.CallbackQuery):
             "user_id": user_id,
             "is_approved": True,
             "subscription_status": "active",
-            "subscription_started_at": start.isoformat(),
+            "subscription_started_at": start_date.isoformat(),
             "subscription_expires_at": expires.isoformat(),
-            "is_active": False,
         },
     )
 
-    await bot.send_message(
-        user_id,
-        "تم تأكيد اشتراكك من المطور.\n\n"
-        "يمكنك الآن بدء تنصيب الحساب.",
-        reply_markup=types.InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    types.InlineKeyboardButton(
-                        text="بدء التنصيب", callback_data="start_install"
-                    )
-                ],
-                [
-                    types.InlineKeyboardButton(
-                        text="القائمة الرئيسية", callback_data="main"
-                    )
-                ],
-            ]
-        ),
+    kb = types.InlineKeyboardMarkup(
+        inline_keyboard=[
+            [types.InlineKeyboardButton(text="بدء التنصيب الفوري", callback_data="start_install")],
+            [types.InlineKeyboardButton(text="رجوع", callback_data="main")],
+        ]
     )
-
     await callback.message.edit_text(
-        f"تم تفعيل المستخدم {user_id} حتى {expires.isoformat()}."
+        "تم تفعيل اشتراكك المجاني بنجاح لمدة شهر!\n\n"
+        "اضغط على زر بدء التنصيب أدناه لربط حسابك.",
+        reply_markup=kb,
     )
-    await callback.answer("تم التفعيل.")
-
-
-@dp.callback_query(F.data.startswith("reject:"))
-async def reject_payment(callback: types.CallbackQuery):
-    if callback.from_user.id != DEV_ID:
-        await callback.answer("للمطور فقط.", show_alert=True)
-        return
-
-    _, user_id_s, payload = callback.data.split(":", 2)
-    user_id = int(user_id_s)
-
-    await db_update(
-        "payments",
-        {"status": "rejected"},
-        invoice_payload=payload,
-    )
-
-    await bot.send_message(user_id, "تم رفض طلب الدفع.")
-    await callback.message.edit_text(f"تم رفض طلب المستخدم {user_id}.")
-    await callback.answer("تم الرفض.")
+    await callback.answer()
 
 
 # ============================================================
@@ -413,9 +313,8 @@ async def reject_payment(callback: types.CallbackQuery):
 async def start_install(callback: types.CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
 
-    if not await is_subscription_active(user_id):
-        await callback.answer("اشتراكك غير فعال أو منتهي.", show_alert=True)
-        return
+    # تفعيل الاشتراك المجاني تلقائياً عند البدء بالتنصيب
+    await is_subscription_active(user_id)
 
     old = LOGIN_CLIENTS.get(user_id)
     if old:
@@ -498,12 +397,11 @@ async def start_install(callback: types.CallbackQuery, state: FSMContext):
 async def instructions(callback: types.CallbackQuery):
     await callback.message.edit_text(
         "التعليمات:\n\n"
-        "1. ادفع 15 نجمة للمطور يدويًا.\n"
-        "2. اضغط أرسلت الدفع.\n"
-        "3. بعد موافقة المطور اضغط بدء التنصيب.\n"
-        "4. يتم تسجيل الحساب عبر QR Login.\n"
-        "5. بعد نجاح الدخول يعمل اليوزربوت تلقائيًا.\n\n"
-        "ملاحظة: لا ترسل كلمة مرور Telegram إلى البوت.",
+        "1. الاشتراك مجاني بالكامل لمدة شهر.\n"
+        "2. اضغط على تفعيل الاشتراك المجاني.\n"
+        "3. اضغط بدء التنصيب.\n"
+        "4. قم بمسح رمز QR لربط الحساب.\n"
+        "5. بعد نجاح الدخول يعمل اليوزربوت تلقائيًا.",
         reply_markup=back_keyboard(),
     )
     await callback.answer()
@@ -516,8 +414,7 @@ async def mute_panel(callback: types.CallbackQuery):
         "داخل محادثة الشخص من الحساب المرتبط، أرسل:\n"
         "كتم\n"
         "لفتح الكتم أرسل:\n"
-        "فك كتم\n\n"
-        "يمكن إدارة القائمة من قاعدة البيانات.",
+        "فك كتم",
         reply_markup=back_keyboard(),
     )
     await callback.answer()
@@ -570,7 +467,7 @@ async def delete_word(callback: types.CallbackQuery):
 @dp.callback_query(F.data == "list_words")
 async def list_words(callback: types.CallbackQuery):
     res = await db_select("blocked_words", "*")
-    rows = [x for x in (res.data or []) if x.get("owner_user_id") == callback.from_user.id]
+    rows = [x for x in (res.data or []) if x.get("owner_user_id"] == callback.from_user.id]
     text = "الكلمات:\n\n" + "\n".join(f"- {x['word']}" for x in rows)
     await callback.message.answer(text if rows else "لا توجد كلمات.")
     await callback.answer()
@@ -579,9 +476,7 @@ async def list_words(callback: types.CallbackQuery):
 @dp.callback_query(F.data == "lock")
 async def lock_panel(callback: types.CallbackQuery):
     await callback.message.edit_text(
-        "قفل الخاص\n\n"
-        "هذه الواجهة جاهزة لحفظ إعدادات القفل في user_bots. "
-        "التنفيذ الفعلي يتم داخل اليوزربوت حسب الأنواع التي يحددها المستخدم.",
+        "قفل الخاص\n\nإعدادات القفل محفوظة.",
         reply_markup=back_keyboard(),
     )
     await callback.answer()
@@ -595,10 +490,7 @@ async def notifications(callback: types.CallbackQuery):
         "user_bots",
         {"user_id": callback.from_user.id, "notifications_enabled": not enabled},
     )
-    await callback.answer(
-        "تم التغيير.",
-        show_alert=True,
-    )
+    await callback.answer("تم التغيير.", show_alert=True)
 
 
 @dp.callback_query(F.data == "save_media")
@@ -717,7 +609,7 @@ async def shortcut_reply(message: types.Message, state: FSMContext):
 @dp.callback_query(F.data == "list_shortcuts")
 async def list_shortcuts(callback: types.CallbackQuery):
     res = await db_select("shortcuts", "*")
-    rows = [x for x in (res.data or []) if x.get("owner_user_id") == callback.from_user.id]
+    rows = [x for x in (res.data or []) if x.get("owner_user_id"] == callback.from_user.id]
     text = "الاختصارات:\n\n" + "\n".join(
         f"{x['shortcut']} -> {x['response']}" for x in rows
     )
@@ -734,11 +626,6 @@ async def broadcast(callback: types.CallbackQuery, state: FSMContext):
 
 @dp.message(Form.waiting_broadcast)
 async def do_broadcast(message: types.Message, state: FSMContext):
-    if not await is_subscription_active(message.from_user.id):
-        await message.answer("اشتراكك غير فعال.")
-        await state.clear()
-        return
-
     row = await get_user_row(message.from_user.id)
     if not row or not row.get("account_id"):
         await message.answer("لا يوجد حساب مرتبط.")
@@ -818,7 +705,7 @@ async def autoreply_reply(message: types.Message, state: FSMContext):
 @dp.callback_query(F.data == "list_autoreply")
 async def list_autoreply(callback: types.CallbackQuery):
     res = await db_select("auto_replies", "*")
-    rows = [x for x in (res.data or []) if x.get("owner_user_id") == callback.from_user.id]
+    rows = [x for x in (res.data or []) if x.get("owner_user_id"] == callback.from_user.id]
     text = "الردود:\n\n" + "\n".join(
         f"{x['trigger_text']} -> {x['reply_text']}" for x in rows
     )
@@ -861,10 +748,7 @@ async def set_destroy(message: types.Message, state: FSMContext):
 @dp.callback_query(F.data == "forced")
 async def forced(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(Form.waiting_forced_channel)
-    await callback.message.answer(
-        "أرسل معرف القناة مثل @channel.\n"
-        "تأكد أن الحساب يستطيع فحص العضوية."
-    )
+    await callback.message.answer("أرسل معرف القناة مثل @channel.")
     await callback.answer()
 
 
@@ -886,8 +770,7 @@ async def set_forced(message: types.Message, state: FSMContext):
 @dp.callback_query(F.data == "welcome")
 async def welcome(callback: types.CallbackQuery):
     await callback.message.edit_text(
-        "إعداد الترحيب محفوظ في user_bots. "
-        "يمكن تفعيل الخاص والمجموعات من خلال قاعدة البيانات أو إضافة أزرار إعداد مخصصة.",
+        "إعداد الترحيب محفوظ في قاعدة البيانات.",
         reply_markup=back_keyboard(),
     )
     await callback.answer()
@@ -964,26 +847,6 @@ async def clock_loop(client: TelegramClient, user_id: int, account_id: int):
         await asyncio.sleep(60)
 
 
-async def subscription_guard(client: TelegramClient, user_id: int):
-    while True:
-        try:
-            if not await is_subscription_active(user_id):
-                await db_update(
-                    "user_bots",
-                    {
-                        "is_active": False,
-                        "subscription_status": "expired",
-                    },
-                    user_id=user_id,
-                )
-                await client.disconnect()
-                return
-        except Exception as e:
-            print("[SUBSCRIPTION]", user_id, e)
-
-        await asyncio.sleep(300)
-
-
 async def start_userbot(session_string: str, account_id: int, owner_id: int):
     if account_id in ACTIVE_CLIENTS:
         try:
@@ -1011,7 +874,6 @@ async def start_userbot(session_string: str, account_id: int, owner_id: int):
 
     USER_TASKS[account_id] = [
         asyncio.create_task(clock_loop(client, owner_id, account_id)),
-        asyncio.create_task(subscription_guard(client, owner_id)),
     ]
 
     @client.on(events.NewMessage(incoming=True))
@@ -1035,7 +897,6 @@ async def start_userbot(session_string: str, account_id: int, owner_id: int):
             text = (event.raw_text or "").strip()
             low = text.lower()
 
-            # Commands for mute / unmute
             if low == "كتم":
                 try:
                     await db_upsert(
@@ -1063,7 +924,6 @@ async def start_userbot(session_string: str, account_id: int, owner_id: int):
                     pass
                 return
 
-            # Blocked words
             words = await get_words(owner_id)
             if any(word and word in low for word in words):
                 try:
@@ -1072,7 +932,6 @@ async def start_userbot(session_string: str, account_id: int, owner_id: int):
                     pass
                 return
 
-            # Auto replies
             for item in await get_autoreplies(owner_id):
                 trigger = (item.get("trigger_text") or "").lower()
                 if trigger and trigger in low:
@@ -1083,12 +942,11 @@ async def start_userbot(session_string: str, account_id: int, owner_id: int):
                     break
 
             # ====================================================
-            # حفظ الوسائط العادية وذاتية التدمير (Time-To-Live / View Once)
+            # حفظ الوسائط العادية وذاتية التدمير (TTL / View Once)
             # ====================================================
             row = await get_user_row(owner_id)
             if row and row.get("save_media_enabled") and event.message.media:
                 try:
-                    # فحص إذا كانت الوسائط مؤقتة / ذاتية التدمير (TTL) أو عادية
                     msg_media = event.message.media
                     is_ttl = (
                         getattr(msg_media, 'ttl_seconds', None) is not None or
@@ -1097,7 +955,6 @@ async def start_userbot(session_string: str, account_id: int, owner_id: int):
                     )
 
                     if is_ttl:
-                        # إعادة توجيه فورية لحفظ الوسائط ذاتية التدمير والوقتية في المحفوظات (me)
                         try:
                             await client.forward_messages('me', event.message)
                         except Exception:
@@ -1109,7 +966,6 @@ async def start_userbot(session_string: str, account_id: int, owner_id: int):
                                 except Exception:
                                     pass
                     else:
-                        # الوسائط العادية
                         path = await event.message.download_media()
                         if path:
                             await client.send_file(
@@ -1124,7 +980,6 @@ async def start_userbot(session_string: str, account_id: int, owner_id: int):
                 except Exception as e:
                     print("[MEDIA]", e)
 
-            # Forced subscription check
             if row and row.get("forced_subscription_enabled"):
                 channel = row.get("forced_subscription_channel")
                 if channel:
@@ -1148,7 +1003,6 @@ async def start_userbot(session_string: str, account_id: int, owner_id: int):
         try:
             text = (event.raw_text or "").strip()
 
-            # Shortcut commands
             for item in await get_shortcuts(owner_id):
                 shortcut = (item.get("shortcut") or "").strip()
                 if shortcut and text == shortcut:
@@ -1162,7 +1016,7 @@ async def start_userbot(session_string: str, account_id: int, owner_id: int):
                     )
                     return
 
-            # Channel content commands
+            # قنوات الترفيه والأوامر (غنيلي، شعر، مزج، ميمز، قرآن)
             if text in CHANNELS_MAP:
                 try:
                     await event.delete()
@@ -1170,7 +1024,6 @@ async def start_userbot(session_string: str, account_id: int, owner_id: int):
                     pass
                 return
 
-            # Destroy outgoing messages
             row = await get_user_row(owner_id)
             if row and row.get("destroy_messages_enabled"):
                 seconds = int(row.get("destroy_seconds") or 0)
@@ -1185,9 +1038,7 @@ async def start_userbot(session_string: str, account_id: int, owner_id: int):
         try:
             if not event.is_private:
                 return
-
             text = (event.raw_text or "").strip()
-
             if event.out and text == "حذف" and event.is_reply:
                 reply = await event.get_reply_message()
                 if reply:
@@ -1196,7 +1047,6 @@ async def start_userbot(session_string: str, account_id: int, owner_id: int):
                         await event.delete()
                     except Exception:
                         pass
-
         except Exception as e:
             print("[COMMAND]", e)
 
@@ -1241,17 +1091,6 @@ async def restore_sessions():
         if not user_id:
             continue
 
-        if not await is_subscription_active(user_id):
-            await db_update(
-                "user_bots",
-                {
-                    "is_active": False,
-                    "subscription_status": "expired",
-                },
-                user_id=user_id,
-            )
-            continue
-
         try:
             asyncio.create_task(
                 start_userbot(
@@ -1279,12 +1118,10 @@ async def dev_panel(callback: types.CallbackQuery):
     rows = res.data or []
 
     active = sum(1 for x in rows if x.get("is_active"))
-    approved = sum(1 for x in rows if x.get("is_approved"))
 
     await callback.message.edit_text(
         "لوحة المطور\n\n"
         f"المستخدمون: {len(rows)}\n"
-        f"الموافق عليهم: {approved}\n"
         f"اليوزربوتات النشطة: {active}",
         reply_markup=back_keyboard(),
     )
@@ -1292,7 +1129,7 @@ async def dev_panel(callback: types.CallbackQuery):
 
 
 # ============================================================
-# GLOBAL ERROR-SAFE FALLBACK
+# GLOBAL FALLBACK
 # ============================================================
 
 @dp.message()
