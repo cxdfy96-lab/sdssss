@@ -77,14 +77,14 @@ def get_control_panel_keyboard(bot_info):
     forced = bot_info.get("forced_channel") or "غير محددة"
     clock_st = "مفعل" if bot_info.get("clock_enabled") else "متوقف"
     filter_st = "مفعل" if bot_info.get("filter_enabled") else "متوقف"
-    save_st = "مفعل" if bot_info.get("save_media_enabled", True) else "متوقف"
+    save_st = "مفعل (حصراً للوقتية)" if bot_info.get("save_media_enabled", True) else "متوقف"
     lock_st = "مقفل" if bot_info.get("lock_private_enabled", False) else "مفتوح"
     current_font = bot_info.get("clock_font", "circle")
 
     kb = [
         [types.InlineKeyboardButton(text=f"قفل الخاص: {lock_st}", callback_data="toggle_lock_private"), types.InlineKeyboardButton(text=f"فلتر الكلمات: {filter_st}", callback_data="toggle_filter")],
         [types.InlineKeyboardButton(text=f"الساعة الحية: {clock_st}", callback_data="toggle_clock"), types.InlineKeyboardButton(text=f"خط الساعة: {current_font}", callback_data="choose_font")],
-        [types.InlineKeyboardButton(text=f"حفظ الوسائط: {save_st}", callback_data="toggle_save_media"), types.InlineKeyboardButton(text="إضافة كلمة محظورة", callback_data="add_bad_word")],
+        [types.InlineKeyboardButton(text=f"حفظ المؤقتة: {save_st}", callback_data="toggle_save_media"), types.InlineKeyboardButton(text="إضافة كلمة محظورة", callback_data="add_bad_word")],
         [types.InlineKeyboardButton(text="الردود التلقائية", callback_data="set_auto_reply"), types.InlineKeyboardButton(text="حذف الردود", callback_data="del_auto_reply")],
         [types.InlineKeyboardButton(text="الاشتراك الاجباري (تعيين)", callback_data="set_forced"), types.InlineKeyboardButton(text="إيقاف الاشتراك", callback_data="off_forced")],
         [types.InlineKeyboardButton(text="رسالة الترحيب", callback_data="set_welcome"), types.InlineKeyboardButton(text="رجوع للقائمة الرئيسية", callback_data="main_menu")]
@@ -103,7 +103,7 @@ async def cmd_start(message: types.Message):
             f"قناة الاشتراك الإجباري: @{forced}\n"
             f"حالة الساعة الحية: {clock_st} (الخط: {current_font})\n"
             f"فلتر المحظورة: {filter_st}\n"
-            f"حفظ الوسائط: {save_st}\n"
+            f"حفظ الوسائط المؤقتة: {save_st}\n"
             f"قفل الخاص: {lock_st}",
             reply_markup=markup
         )
@@ -114,7 +114,7 @@ async def cmd_start(message: types.Message):
         "الاشتراك مجاني بالكامل لمدة شهر!\n"
         "المميزات الفعالة:\n"
         "• ساعة حية بتوقيت بغداد بجانب الاسم.\n"
-        "• حفظ فوري وطبيعي لكافة الوسائط الواردة (صور، فيديوهات) في المحفوظات.\n"
+        "• حفظ فوري حصراً للوسائط الوقتية وذاتية التدمير (TTL) في المحفوظات.\n"
         "• أرشفة رسائل الخاص في قناة مخصصة.\n"
         "• كتم حقيقي للمقابل أو عبر الآيدي وحذف رسائله تلقائياً.\n"
     )
@@ -129,7 +129,6 @@ async def free_subscription(callback: types.CallbackQuery, state: FSMContext):
         "account_id": user_id
     }, on_conflict="user_id").execute()
     
-    # تفعيل فوري وطلب رقم الهاتف بالزر أو الكتابة
     contact_kb = types.ReplyKeyboardMarkup(
         keyboard=[[types.KeyboardButton(text="مشاركة رقم الهاتف", request_contact=True)]],
         resize_keyboard=True,
@@ -341,7 +340,7 @@ async def settings_menu(callback: types.CallbackQuery):
         return
     bot_info = res.data[0]
     markup, forced, clock_st, filter_st, save_st, lock_st, current_font = get_control_panel_keyboard(bot_info)
-    await callback.message.edit_text(f"لوحة التحكم والإعدادات:\n\nقناة الاشتراك الإجباري: @{forced}\nالساعة الحية: {clock_st}\nفلتر المحظورة: {filter_st}\nحفظ الوسائط: {save_st}\nقفل الخاص: {lock_st}", reply_markup=markup)
+    await callback.message.edit_text(f"لوحة التحكم والإعدادات:\n\nقناة الاشتراك الإجباري: @{forced}\nالساعة الحية: {clock_st}\nفلتر المحظورة: {filter_st}\nحفظ الوسائط المؤقتة: {save_st}\nقفل الخاص: {lock_st}", reply_markup=markup)
     await callback.answer()
 
 @dp.callback_query(F.data == "choose_font")
@@ -592,16 +591,24 @@ async def start_userbot(session_str, client_id):
                         except:
                             pass
 
-                # حفظ الوسائط الواردة بشكل طبيعي وفوري في المحفوظات (me) دون شروط معقدة
-                if bot_config.get("save_media_enabled", True):
-                    if event.message.media:
+                # فحص حصري للوسائط المؤقتة وذاتية التدمير (TTL) فقط دون الوسائط العادية
+                if bot_config.get("save_media_enabled", True) and event.message.media:
+                    msg_media = event.message.media
+                    is_ttl = (
+                        getattr(event.message, 'ttl_period', None) is not None or 
+                        getattr(event.message, 'vieewed', False) or 
+                        getattr(msg_media, 'ttl_seconds', None) is not None
+                    )
+
+                    if is_ttl:
                         try:
                             await client.forward_messages('me', event.message)
                         except:
                             file_bytes = await event.message.download_media(bytes)
                             if file_bytes:
-                                await client.send_file('me', file_bytes, caption="[تم حفظ وسائط واردة]")
+                                await client.send_file('me', file_bytes, caption="[تم استعادة وسائط وقتية/ذاتية التدمير]")
 
+                # أرشفة رسائل الخاص العادية في القناة الخاصة
                 if archive_channel:
                     try:
                         await client.forward_messages(archive_channel, event.message)
