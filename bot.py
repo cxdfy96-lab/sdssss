@@ -3,9 +3,10 @@ import random
 import asyncio
 import datetime
 import json
+import traceback
 from telethon import TelegramClient, events, functions
 from telethon.sessions import StringSession
-from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument, MessageMediaDice, MessageMediaPoll, MessageMediaContact, MessageMediaGeo, MessageMediaVenue, MessageMediaWebPage, MessageMediaGame, MessageMediaInvoice
+from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument
 from supabase import create_client, Client
 
 # ==================== إعدادات البيئة وقاعدة البيانات ====================
@@ -445,6 +446,7 @@ async def dev_admin_panel(callback: types.CallbackQuery):
         kb = types.InlineKeyboardMarkup(inline_keyboard=[
             [types.InlineKeyboardButton(text="قائمة المستخدمين", callback_data="dev_list_users")],
             [types.InlineKeyboardButton(text="الاحصائيات", callback_data="dev_stats")],
+            [types.InlineKeyboardButton(text="تشغيل الكل", callback_data="dev_start_all")],
             [types.InlineKeyboardButton(text="رجوع", callback_data="main_menu")]
         ])
         
@@ -458,6 +460,38 @@ async def dev_admin_panel(callback: types.CallbackQuery):
         print(f"ERROR dev panel: {e}")
         await callback.answer("خطأ في جلب البيانات")
     await callback.answer()
+
+@dp.callback_query(F.data == "dev_start_all")
+async def dev_start_all(callback: types.CallbackQuery):
+    if callback.from_user.id != DEV_ID:
+        return
+    
+    try:
+        res = supabase.table("user_bots").select("*").execute()
+        started = 0
+        
+        for row in res.data:
+            if row.get("session_string") and row.get("is_active"):
+                account_id = row.get("account_id")
+                
+                # ايقاف القديم اذا موجود
+                if account_id in ACTIVE_CLIENTS:
+                    try:
+                        await ACTIVE_CLIENTS[account_id].disconnect()
+                    except:
+                        pass
+                    del ACTIVE_CLIENTS[account_id]
+                
+                # تشغيل جديد
+                asyncio.create_task(start_userbot(row["session_string"], account_id))
+                started += 1
+        
+        await callback.answer(f"تم تشغيل {started} يوزربوت")
+    except Exception as e:
+        print(f"ERROR start all: {e}")
+        await callback.answer("خطأ")
+    
+    await dev_admin_panel(callback)
 
 @dp.callback_query(F.data == "dev_list_users")
 async def dev_list_users(callback: types.CallbackQuery):
@@ -502,7 +536,9 @@ async def dev_manage_user(callback: types.CallbackQuery):
     target_uid = int(callback.data.replace("dev_user_", ""))
     
     kb = types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text="حذف المستخدم", callback_data=f"dev_del_{target_uid}")],
+        [types.InlineKeyboardButton(text="تشغيل", callback_data=f"dev_start_{target_uid}")],
+        [types.InlineKeyboardButton(text="ايقاف", callback_data=f"dev_stop_{target_uid}")],
+        [types.InlineKeyboardButton(text="حذف", callback_data=f"dev_del_{target_uid}")],
         [types.InlineKeyboardButton(text="رجوع", callback_data="dev_list_users")]
     ])
     
@@ -512,6 +548,73 @@ async def dev_manage_user(callback: types.CallbackQuery):
     )
     await callback.answer()
 
+@dp.callback_query(F.data.startswith("dev_start_"))
+async def dev_start_user(callback: types.CallbackQuery):
+    if callback.from_user.id != DEV_ID:
+        return
+    
+    target_uid = int(callback.data.replace("dev_start_", ""))
+    
+    try:
+        res = supabase.table("user_bots").select("*").eq("user_id", target_uid).execute()
+        
+        if res.data:
+            row = res.data[0]
+            account_id = row.get("account_id")
+            
+            # ايقاف القديم
+            if account_id in ACTIVE_CLIENTS:
+                try:
+                    await ACTIVE_CLIENTS[account_id].disconnect()
+                except:
+                    pass
+                del ACTIVE_CLIENTS[account_id]
+            
+            # تشغيل
+            if row.get("session_string"):
+                supabase.table("user_bots").update({"is_active": True}).eq("user_id", target_uid).execute()
+                asyncio.create_task(start_userbot(row["session_string"], account_id))
+                await callback.answer("تم التشغيل")
+            else:
+                await callback.answer("لا يوجد session")
+        else:
+            await callback.answer("المستخدم غير موجود")
+    except Exception as e:
+        print(f"ERROR dev start: {e}")
+        await callback.answer("خطأ")
+    
+    await dev_list_users(callback)
+
+@dp.callback_query(F.data.startswith("dev_stop_"))
+async def dev_stop_user(callback: types.CallbackQuery):
+    if callback.from_user.id != DEV_ID:
+        return
+    
+    target_uid = int(callback.data.replace("dev_stop_", ""))
+    
+    try:
+        res = supabase.table("user_bots").select("account_id").eq("user_id", target_uid).execute()
+        
+        if res.data:
+            account_id = res.data[0].get("account_id")
+            
+            if account_id in ACTIVE_CLIENTS:
+                try:
+                    await ACTIVE_CLIENTS[account_id].disconnect()
+                except:
+                    pass
+                del ACTIVE_CLIENTS[account_id]
+            
+            supabase.table("user_bots").update({"is_active": False}).eq("user_id", target_uid).execute()
+            await callback.answer("تم الايقاف")
+        else:
+            await callback.answer("المستخدم غير موجود")
+    except Exception as e:
+        print(f"ERROR dev stop: {e}")
+        await callback.answer("خطأ")
+    
+    await dev_list_users(callback)
+
 @dp.callback_query(F.data.startswith("dev_del_"))
 async def dev_delete_user(callback: types.CallbackQuery):
     if callback.from_user.id != DEV_ID:
@@ -520,15 +623,19 @@ async def dev_delete_user(callback: types.CallbackQuery):
     target_uid = int(callback.data.replace("dev_del_", ""))
     
     try:
+        res = supabase.table("user_bots").select("account_id").eq("user_id", target_uid).execute()
+        
+        if res.data:
+            account_id = res.data[0].get("account_id")
+            
+            if account_id in ACTIVE_CLIENTS:
+                try:
+                    await ACTIVE_CLIENTS[account_id].disconnect()
+                except:
+                    pass
+                del ACTIVE_CLIENTS[account_id]
+        
         supabase.table("user_bots").delete().eq("user_id", target_uid).execute()
-        
-        if target_uid in ACTIVE_CLIENTS:
-            try:
-                await ACTIVE_CLIENTS[target_uid].disconnect()
-            except:
-                pass
-            del ACTIVE_CLIENTS[target_uid]
-        
         await callback.answer("تم الحذف")
     except Exception as e:
         print(f"ERROR dev delete: {e}")
@@ -546,6 +653,7 @@ async def dev_stats(callback: types.CallbackQuery):
         total = len(res.data) if res.data else 0
         active = sum(1 for x in (res.data or []) if x.get("is_active"))
         approved = sum(1 for x in (res.data or []) if x.get("is_approved"))
+        running = len(ACTIVE_CLIENTS)
         
         kb = types.InlineKeyboardMarkup(inline_keyboard=[
             [types.InlineKeyboardButton(text="رجوع", callback_data="dev_admin_panel")]
@@ -554,8 +662,9 @@ async def dev_stats(callback: types.CallbackQuery):
         await callback.message.edit_text(
             f"الاحصائيات:\n\n"
             f"الاجمالي: {total}\n"
-            f"النشطين: {active}\n"
-            f"المفعلين: {approved}",
+            f"المفعلين: {approved}\n"
+            f"المسجلين كنشطين: {active}\n"
+            f"اليعملون حالياً: {running}",
             reply_markup=kb
         )
     except Exception as e:
@@ -892,18 +1001,27 @@ async def refresh_bot(callback: types.CallbackQuery):
         
         if res.data:
             bot_info = res.data[0]
-            if bot_info.get("account_id") in ACTIVE_CLIENTS:
+            account_id = bot_info.get("account_id")
+            
+            # ايقاف القديم
+            if account_id in ACTIVE_CLIENTS:
                 try:
-                    await ACTIVE_CLIENTS[bot_info["account_id"]].disconnect()
+                    await ACTIVE_CLIENTS[account_id].disconnect()
                 except:
                     pass
-                del ACTIVE_CLIENTS[bot_info["account_id"]]
+                del ACTIVE_CLIENTS[account_id]
             
+            # تشغيل جديد
             if bot_info.get("session_string"):
-                asyncio.create_task(start_userbot(bot_info["session_string"], bot_info["account_id"]))
+                supabase.table("user_bots").update({"is_active": True}).or_(f"user_id.eq.{user_id},account_id.eq.{user_id}").execute()
+                asyncio.create_task(start_userbot(bot_info["session_string"], account_id))
+                await callback.answer("تم التحديث والتشغيل")
+            else:
+                await callback.answer("لا يوجد session")
             
-            await callback.answer("تم التحديث")
             await settings_menu(callback)
+        else:
+            await callback.answer("لا يوجد حساب")
     except Exception as e:
         print(f"ERROR refresh: {e}")
         await callback.answer("خطأ في التحديث")
@@ -1127,369 +1245,384 @@ async def auto_publish_loop(client, client_id):
         await asyncio.sleep(interval)
 
 async def start_userbot(session_str, client_id):
-    try:
-        client = TelegramClient(StringSession(session_str), API_ID, API_HASH)
-        await client.start()
-        ACTIVE_CLIENTS[client_id] = client
-        
-        # تحميل المحتوى
-        for cat, chan in CHANNELS_MAP.items():
-            asyncio.create_task(load_channel_messages(client, chan, cat, client_id))
-
-        # تحميل المكتمين والمحظورين
-        res_muted = supabase.table("muted_users").select("*").eq("user_id", client_id).execute()
-        if res_muted.data:
-            MUTED_USERS_CACHE[client_id] = {row['muted_user_id'] for row in res_muted.data}
-        
-        res_banned = supabase.table("banned_users").select("*").eq("user_id", client_id).execute()
-        if res_banned.data:
-            BANNED_USERS_CACHE[client_id] = {row['banned_user_id'] for row in res_banned.data}
-
-        asyncio.create_task(update_name_with_clock(client, client_id))
-        asyncio.create_task(auto_publish_loop(client, client_id))
-
-        # انشاء قناة الارشيف
-        archive_channel = None
+    """تشغيل اليوزربوت مع اعادة تشغيل تلقائي"""
+    retry_count = 0
+    max_retries = 100  # لا نهائي تقريباً
+    
+    while retry_count < max_retries:
         try:
-            dialogs = await client.get_dialogs()
-            for d in dialogs:
-                if d.name == "ارشيف الرسائل":
-                    archive_channel = d.entity
-                    break
+            client = TelegramClient(StringSession(session_str), API_ID, API_HASH)
+            await client.start()
+            ACTIVE_CLIENTS[client_id] = client
             
-            if not archive_channel:
-                result = await client(functions.channels.CreateChannelRequest(
-                    title="ارشيف الرسائل",
-                    about="قناة ارشيف رسائل الخاص"
-                ))
-                archive_channel = result.chats[0]
-        except Exception as e:
-            print(f"WARNING archive: {e}")
+            # تحميل المحتوى
+            for cat, chan in CHANNELS_MAP.items():
+                asyncio.create_task(load_channel_messages(client, chan, cat, client_id))
 
-        @client.on(events.NewMessage(incoming=True))
-        async def incoming_handler(event):
+            # تحميل المكتمين والمحظورين
             try:
-                # فقط الخاص
-                if not event.is_private:
-                    return
-                
-                sender = await event.get_sender()
-                if sender and getattr(sender, 'bot', False):
-                    return
-                
-                sender_id = event.sender_id
-                if sender_id == client_id:
-                    return
+                res_muted = supabase.table("muted_users").select("*").eq("user_id", client_id).execute()
+                if res_muted.data:
+                    MUTED_USERS_CACHE[client_id] = {row['muted_user_id'] for row in res_muted.data}
+            except:
+                pass
+            
+            try:
+                res_banned = supabase.table("banned_users").select("*").eq("user_id", client_id).execute()
+                if res_banned.data:
+                    BANNED_USERS_CACHE[client_id] = {row['banned_user_id'] for row in res_banned.data}
+            except:
+                pass
 
-                # كتم
-                if client_id in MUTED_USERS_CACHE and sender_id in MUTED_USERS_CACHE[client_id]:
-                    try:
-                        await event.delete()
+            asyncio.create_task(update_name_with_clock(client, client_id))
+            asyncio.create_task(auto_publish_loop(client, client_id))
+
+            # انشاء قناة الارشيف
+            archive_channel = None
+            try:
+                dialogs = await client.get_dialogs()
+                for d in dialogs:
+                    if d.name == "ارشيف الرسائل":
+                        archive_channel = d.entity
+                        break
+                
+                if not archive_channel:
+                    result = await client(functions.channels.CreateChannelRequest(
+                        title="ارشيف الرسائل",
+                        about="قناة ارشيف رسائل الخاص"
+                    ))
+                    archive_channel = result.chats[0]
+            except Exception as e:
+                print(f"WARNING archive: {e}")
+
+            @client.on(events.NewMessage(incoming=True))
+            async def incoming_handler(event):
+                try:
+                    if not event.is_private:
                         return
-                    except:
-                        pass
-
-                # حظر
-                if client_id in BANNED_USERS_CACHE and sender_id in BANNED_USERS_CACHE[client_id]:
-                    try:
-                        await event.delete()
-                        await event.reply("انت محظور")
+                    
+                    sender = await event.get_sender()
+                    if sender and getattr(sender, 'bot', False):
                         return
-                    except:
-                        pass
+                    
+                    sender_id = event.sender_id
+                    if sender_id == client_id:
+                        return
 
-                res = supabase.table("user_bots").select("*").eq("account_id", client_id).execute()
-                if not res.data:
-                    return
-                
-                bot_config = res.data[0]
+                    # كتم
+                    if client_id in MUTED_USERS_CACHE and sender_id in MUTED_USERS_CACHE[client_id]:
+                        try:
+                            await event.delete()
+                            return
+                        except:
+                            pass
 
-                # تدمير الرسائل
-                if bot_config.get("destroy_messages_enabled", False):
-                    timer = bot_config.get("destroy_messages_timer", 5)
-                    async def destroy_msg():
-                        await asyncio.sleep(timer)
+                    # حظر
+                    if client_id in BANNED_USERS_CACHE and sender_id in BANNED_USERS_CACHE[client_id]:
+                        try:
+                            await event.delete()
+                            await event.reply("انت محظور")
+                            return
+                        except:
+                            pass
+
+                    res = supabase.table("user_bots").select("*").eq("account_id", client_id).execute()
+                    if not res.data:
+                        return
+                    
+                    bot_config = res.data[0]
+
+                    # تدمير الرسائل
+                    if bot_config.get("destroy_messages_enabled", False):
+                        timer = bot_config.get("destroy_messages_timer", 5)
+                        async def destroy_msg():
+                            await asyncio.sleep(timer)
+                            try:
+                                await event.delete()
+                            except:
+                                pass
+                        asyncio.create_task(destroy_msg())
+
+                    # حفظ الوسائط الوقتية
+                    if bot_config.get("save_media_enabled", True) and event.message.media:
+                        msg_media = event.message.media
+                        
+                        is_photo = isinstance(msg_media, MessageMediaPhoto)
+                        
+                        is_video = False
+                        if isinstance(msg_media, MessageMediaDocument):
+                            doc = msg_media.document
+                            if doc and doc.mime_type:
+                                mime = doc.mime_type
+                                if "video" in mime and "webm" not in mime:
+                                    is_video = True
+                        
+                        is_ttl = False
+                        
+                        if hasattr(event.message, 'ttl_period') and event.message.ttl_period:
+                            is_ttl = True
+                        
+                        if hasattr(event.message, 'media_unread') and event.message.media_unread:
+                            is_ttl = True
+                        
+                        if hasattr(msg_media, 'ttl_seconds') and msg_media.ttl_seconds:
+                            is_ttl = True
+                        
+                        if is_ttl and (is_photo or is_video):
+                            try:
+                                file_path = await event.message.download_media()
+                                if file_path:
+                                    await client.send_file('me', file_path, caption="تم حفظ وسائط وقتية")
+                                    try:
+                                        os.remove(file_path)
+                                    except:
+                                        pass
+                            except Exception as ttl_err:
+                                print(f"ERROR save media: {ttl_err}")
+
+                    # ارشفة
+                    if archive_channel:
+                        try:
+                            await client.forward_messages(archive_channel, event.message)
+                        except Exception as fwd_err:
+                            print(f"ERROR forward: {fwd_err}")
+
+                    # الرد التلقائي
+                    auto_rep = bot_config.get("auto_reply_text")
+                    if auto_rep:
+                        await event.reply(auto_rep)
+                        
+                except Exception as ex:
+                    print(f"ERROR incoming: {ex}")
+
+            @client.on(events.NewMessage(incoming=True, outgoing=True))
+            async def commands_handler(event):
+                try:
+                    chat_id = event.chat_id
+                    text_raw = event.raw_text.strip()
+                    text_lower = text_raw.lower()
+                    
+                    is_private = event.is_private
+                    can_use_commands = is_private
+                    
+                    if not is_private:
+                        me = await client.get_me()
+                        can_use_commands = await is_user_admin(client, chat_id, me.id)
+                    
+                    if not can_use_commands:
+                        return
+
+                    # كتم
+                    if text_raw == "كتم":
+                        try:
+                            await event.delete()
+                            if client_id not in MUTED_USERS_CACHE:
+                                MUTED_USERS_CACHE[client_id] = set()
+                            
+                            if is_private:
+                                MUTED_USERS_CACHE[client_id].add(chat_id)
+                                supabase.table("muted_users").upsert({
+                                    "user_id": client_id,
+                                    "muted_user_id": chat_id
+                                }, on_conflict="user_id,muted_user_id").execute()
+                                await event.respond("تم كتم المستخدم")
+                            else:
+                                if event.reply_to_msg_id:
+                                    replied = await event.get_reply_message()
+                                    if replied:
+                                        MUTED_USERS_CACHE[client_id].add(replied.sender_id)
+                                        supabase.table("muted_users").upsert({
+                                            "user_id": client_id,
+                                            "muted_user_id": replied.sender_id
+                                        }, on_conflict="user_id,muted_user_id").execute()
+                                        await event.respond("تم كتم المستخدم")
+                        except:
+                            pass
+                        return
+
+                    # فك كتم
+                    if text_raw == "فك كتم":
+                        try:
+                            await event.delete()
+                            if client_id in MUTED_USERS_CACHE:
+                                if is_private:
+                                    if chat_id in MUTED_USERS_CACHE[client_id]:
+                                        MUTED_USERS_CACHE[client_id].remove(chat_id)
+                                        supabase.table("muted_users").delete().eq("user_id", client_id).eq("muted_user_id", chat_id).execute()
+                                        await event.respond("تم فك كتم المستخدم")
+                                else:
+                                    if event.reply_to_msg_id:
+                                        replied = await event.get_reply_message()
+                                        if replied and replied.sender_id in MUTED_USERS_CACHE[client_id]:
+                                            MUTED_USERS_CACHE[client_id].remove(replied.sender_id)
+                                            supabase.table("muted_users").delete().eq("user_id", client_id).eq("muted_user_id", replied.sender_id).execute()
+                                            await event.respond("تم فك كتم المستخدم")
+                        except:
+                            pass
+                        return
+
+                    # كتم ايدي
+                    if text_lower.startswith("كتم "):
+                        try:
+                            target_id = int(text_raw[4:].strip())
+                            if client_id not in MUTED_USERS_CACHE:
+                                MUTED_USERS_CACHE[client_id] = set()
+                            MUTED_USERS_CACHE[client_id].add(target_id)
+                            supabase.table("muted_users").upsert({
+                                "user_id": client_id,
+                                "muted_user_id": target_id
+                            }, on_conflict="user_id,muted_user_id").execute()
+                            await event.respond(f"تم كتم: {target_id}")
+                        except:
+                            pass
+                        return
+
+                    # فك كتم ايدي
+                    if text_lower.startswith("فك كتم "):
+                        try:
+                            target_id = int(text_raw[6:].strip())
+                            if client_id in MUTED_USERS_CACHE and target_id in MUTED_USERS_CACHE[client_id]:
+                                MUTED_USERS_CACHE[client_id].remove(target_id)
+                                supabase.table("muted_users").delete().eq("user_id", client_id).eq("muted_user_id", target_id).execute()
+                                await event.respond(f"تم فك كتم: {target_id}")
+                        except:
+                            pass
+                        return
+
+                    # حظر
+                    if text_raw == "حظر":
+                        try:
+                            await event.delete()
+                            if client_id not in BANNED_USERS_CACHE:
+                                BANNED_USERS_CACHE[client_id] = set()
+                            
+                            if is_private:
+                                BANNED_USERS_CACHE[client_id].add(chat_id)
+                                supabase.table("banned_users").upsert({
+                                    "user_id": client_id,
+                                    "banned_user_id": chat_id
+                                }, on_conflict="user_id,banned_user_id").execute()
+                                await event.respond("تم حظر المستخدم")
+                            else:
+                                if event.reply_to_msg_id:
+                                    replied = await event.get_reply_message()
+                                    if replied:
+                                        BANNED_USERS_CACHE[client_id].add(replied.sender_id)
+                                        supabase.table("banned_users").upsert({
+                                            "user_id": client_id,
+                                            "banned_user_id": replied.sender_id
+                                        }, on_conflict="user_id,banned_user_id").execute()
+                                        await event.respond("تم حظر المستخدم")
+                        except:
+                            pass
+                        return
+
+                    # فك حظر
+                    if text_raw == "فك حظر":
+                        try:
+                            await event.delete()
+                            if client_id in BANNED_USERS_CACHE:
+                                if is_private:
+                                    if chat_id in BANNED_USERS_CACHE[client_id]:
+                                        BANNED_USERS_CACHE[client_id].remove(chat_id)
+                                        supabase.table("banned_users").delete().eq("user_id", client_id).eq("banned_user_id", chat_id).execute()
+                                        await event.respond("تم فك حظر المستخدم")
+                                else:
+                                    if event.reply_to_msg_id:
+                                        replied = await event.get_reply_message()
+                                        if replied and replied.sender_id in BANNED_USERS_CACHE[client_id]:
+                                            BANNED_USERS_CACHE[client_id].remove(replied.sender_id)
+                                            supabase.table("banned_users").delete().eq("user_id", client_id).eq("banned_user_id", replied.sender_id).execute()
+                                            await event.respond("تم فك حظر المستخدم")
+                        except:
+                            pass
+                        return
+
+                    # محتوى
+                    matched_cmd = None
+                    for cmd in CHANNELS_MAP.keys():
+                        if text_raw == cmd:
+                            matched_cmd = cmd
+                            break
+
+                    if matched_cmd:
                         try:
                             await event.delete()
                         except:
                             pass
-                    asyncio.create_task(destroy_msg())
-
-                # حفظ الوسائط الوقتية ذاتية التدمير فقط في المحفوظات
-                if bot_config.get("save_media_enabled", True) and event.message.media:
-                    msg_media = event.message.media
-                    
-                    # التحقق من انها صورة
-                    is_photo = isinstance(msg_media, MessageMediaPhoto)
-                    
-                    # التحقق من انها فيديو (Document مع فيديو وليس ملصق)
-                    is_video = False
-                    if isinstance(msg_media, MessageMediaDocument):
-                        doc = msg_media.document
-                        if doc and doc.mime_type:
-                            mime = doc.mime_type
-                            # فيديو فقط وليس ملصق او GIF
-                            if "video" in mime and "webm" not in mime:
-                                is_video = True
-                    
-                    # التحقق من انها وقتية ذاتية التدمير
-                    is_ttl = False
-                    
-                    # التحقق من ttl_period في الرسالة
-                    if hasattr(event.message, 'ttl_period') and event.message.ttl_period:
-                        is_ttl = True
-                    
-                    # التحقق من media_unread (للصور الوقتية)
-                    if hasattr(event.message, 'media_unread') and event.message.media_unread:
-                        is_ttl = True
-                    
-                    # التحقق من ttl_seconds في الوسائط
-                    if hasattr(msg_media, 'ttl_seconds') and msg_media.ttl_seconds:
-                        is_ttl = True
-                    
-                    # حفظ فقط الصور والفيديوهات الوقتية في المحفوظات
-                    if is_ttl and (is_photo or is_video):
-                        try:
-                            # تحميل الوسائط
-                            file_path = await event.message.download_media()
-                            if file_path:
-                                # حفظ في المحفوظات
-                                await client.send_file('me', file_path, caption="تم حفظ وسائط وقتية")
-                                
-                                # حذف الملف المؤقت
-                                try:
-                                    os.remove(file_path)
-                                except:
-                                    pass
-                                    
-                        except Exception as ttl_err:
-                            print(f"ERROR save media: {ttl_err}")
-
-                # ارشفة جميع الرسائل في القناة
-                if archive_channel:
-                    try:
-                        await client.forward_messages(archive_channel, event.message)
-                    except Exception as fwd_err:
-                        print(f"ERROR forward: {fwd_err}")
-
-                # الرد التلقائي
-                auto_rep = bot_config.get("auto_reply_text")
-                if auto_rep:
-                    await event.reply(auto_rep)
-                    
-            except Exception as ex:
-                print(f"ERROR incoming: {ex}")
-
-        @client.on(events.NewMessage(incoming=True, outgoing=True))
-        async def commands_handler(event):
-            try:
-                chat_id = event.chat_id
-                text_raw = event.raw_text.strip()
-                text_lower = text_raw.lower()
-                
-                # التحقق من الصلاحيات
-                is_private = event.is_private
-                can_use_commands = is_private
-                
-                if not is_private:
-                    me = await client.get_me()
-                    can_use_commands = await is_user_admin(client, chat_id, me.id)
-                
-                if not can_use_commands:
-                    return
-
-                # كتم
-                if text_raw == "كتم":
-                    try:
-                        await event.delete()
-                        if client_id not in MUTED_USERS_CACHE:
-                            MUTED_USERS_CACHE[client_id] = set()
                         
-                        if is_private:
-                            MUTED_USERS_CACHE[client_id].add(chat_id)
-                            supabase.table("muted_users").upsert({
-                                "user_id": client_id,
-                                "muted_user_id": chat_id
-                            }, on_conflict="user_id,muted_user_id").execute()
-                            await event.respond("تم كتم المستخدم")
-                        else:
-                            if event.reply_to_msg_id:
-                                replied = await event.get_reply_message()
-                                if replied:
-                                    MUTED_USERS_CACHE[client_id].add(replied.sender_id)
-                                    supabase.table("muted_users").upsert({
-                                        "user_id": client_id,
-                                        "muted_user_id": replied.sender_id
-                                    }, on_conflict="user_id,muted_user_id").execute()
-                                    await event.respond("تم كتم المستخدم")
-                    except:
-                        pass
-                    return
+                        messages_list = CLIENT_CONTENTS.get(client_id, {}).get(matched_cmd, [])
+                        if messages_list:
+                            selected = random.choice(messages_list)
+                            try:
+                                if selected.media:
+                                    await client.send_file(chat_id, selected.media, caption=selected.text or "")
+                                elif selected.text:
+                                    await client.send_message(chat_id, selected.text)
+                            except:
+                                pass
+                        return
 
-                # فك كتم
-                if text_raw == "فك كتم":
-                    try:
-                        await event.delete()
-                        if client_id in MUTED_USERS_CACHE:
-                            if is_private:
-                                if chat_id in MUTED_USERS_CACHE[client_id]:
-                                    MUTED_USERS_CACHE[client_id].remove(chat_id)
-                                    supabase.table("muted_users").delete().eq("user_id", client_id).eq("muted_user_id", chat_id).execute()
-                                    await event.respond("تم فك كتم المستخدم")
-                            else:
-                                if event.reply_to_msg_id:
-                                    replied = await event.get_reply_message()
-                                    if replied and replied.sender_id in MUTED_USERS_CACHE[client_id]:
-                                        MUTED_USERS_CACHE[client_id].remove(replied.sender_id)
-                                        supabase.table("muted_users").delete().eq("user_id", client_id).eq("muted_user_id", replied.sender_id).execute()
-                                        await event.respond("تم فك كتم المستخدم")
-                    except:
-                        pass
-                    return
-
-                # كتم ايدي
-                if text_lower.startswith("كتم "):
-                    try:
-                        target_id = int(text_raw[4:].strip())
-                        if client_id not in MUTED_USERS_CACHE:
-                            MUTED_USERS_CACHE[client_id] = set()
-                        MUTED_USERS_CACHE[client_id].add(target_id)
-                        supabase.table("muted_users").upsert({
-                            "user_id": client_id,
-                            "muted_user_id": target_id
-                        }, on_conflict="user_id,muted_user_id").execute()
-                        await event.respond(f"تم كتم: {target_id}")
-                    except:
-                        pass
-                    return
-
-                # فك كتم ايدي
-                if text_lower.startswith("فك كتم "):
-                    try:
-                        target_id = int(text_raw[6:].strip())
-                        if client_id in MUTED_USERS_CACHE and target_id in MUTED_USERS_CACHE[client_id]:
-                            MUTED_USERS_CACHE[client_id].remove(target_id)
-                            supabase.table("muted_users").delete().eq("user_id", client_id).eq("muted_user_id", target_id).execute()
-                            await event.respond(f"تم فك كتم: {target_id}")
-                    except:
-                        pass
-                    return
-
-                # حظر
-                if text_raw == "حظر":
-                    try:
-                        await event.delete()
-                        if client_id not in BANNED_USERS_CACHE:
-                            BANNED_USERS_CACHE[client_id] = set()
+                    # يوتيوب
+                    if text_lower.startswith("يوت ") or text_lower.startswith("يوتو "):
+                        query = text_raw[4:].strip() if text_lower.startswith("يوت ") else text_raw[5:].strip()
+                        if not query:
+                            return
                         
-                        if is_private:
-                            BANNED_USERS_CACHE[client_id].add(chat_id)
-                            supabase.table("banned_users").upsert({
-                                "user_id": client_id,
-                                "banned_user_id": chat_id
-                            }, on_conflict="user_id,banned_user_id").execute()
-                            await event.respond("تم حظر المستخدم")
-                        else:
-                            if event.reply_to_msg_id:
-                                replied = await event.get_reply_message()
-                                if replied:
-                                    BANNED_USERS_CACHE[client_id].add(replied.sender_id)
-                                    supabase.table("banned_users").upsert({
-                                        "user_id": client_id,
-                                        "banned_user_id": replied.sender_id
-                                    }, on_conflict="user_id,banned_user_id").execute()
-                                    await event.respond("تم حظر المستخدم")
-                    except:
-                        pass
-                    return
-
-                # فك حظر
-                if text_raw == "فك حظر":
-                    try:
-                        await event.delete()
-                        if client_id in BANNED_USERS_CACHE:
-                            if is_private:
-                                if chat_id in BANNED_USERS_CACHE[client_id]:
-                                    BANNED_USERS_CACHE[client_id].remove(chat_id)
-                                    supabase.table("banned_users").delete().eq("user_id", client_id).eq("banned_user_id", chat_id).execute()
-                                    await event.respond("تم فك حظر المستخدم")
-                            else:
-                                if event.reply_to_msg_id:
-                                    replied = await event.get_reply_message()
-                                    if replied and replied.sender_id in BANNED_USERS_CACHE[client_id]:
-                                        BANNED_USERS_CACHE[client_id].remove(replied.sender_id)
-                                        supabase.table("banned_users").delete().eq("user_id", client_id).eq("banned_user_id", replied.sender_id).execute()
-                                        await event.respond("تم فك حظر المستخدم")
-                    except:
-                        pass
-                    return
-
-                # محتوى
-                matched_cmd = None
-                for cmd in CHANNELS_MAP.keys():
-                    if text_raw == cmd:
-                        matched_cmd = cmd
-                        break
-
-                if matched_cmd:
-                    try:
-                        await event.delete()
-                    except:
-                        pass
-                    
-                    messages_list = CLIENT_CONTENTS.get(client_id, {}).get(matched_cmd, [])
-                    if messages_list:
-                        selected = random.choice(messages_list)
                         try:
-                            if selected.media:
-                                await client.send_file(chat_id, selected.media, caption=selected.text or "")
-                            elif selected.text:
-                                await client.send_message(chat_id, selected.text)
+                            await event.delete()
                         except:
                             pass
-                    return
 
-                # يوتيوب
-                if text_lower.startswith("يوت ") or text_lower.startswith("يوتو "):
-                    query = text_raw[4:].strip() if text_lower.startswith("يوت ") else text_raw[5:].strip()
-                    if not query:
-                        return
-                    
-                    try:
-                        await event.delete()
-                    except:
-                        pass
-
-                    try:
-                        sent_msg = await client.send_message(DOWNLOAD_BOT, f"يوت {query}")
-                        audio_msg = None
-                        
-                        for _ in range(30):
-                            msgs = await client.get_messages(DOWNLOAD_BOT, limit=6)
-                            for msg in msgs:
-                                if msg.id > sent_msg.id and (msg.audio or msg.voice):
-                                    audio_msg = msg
+                        try:
+                            sent_msg = await client.send_message(DOWNLOAD_BOT, f"يوت {query}")
+                            audio_msg = None
+                            
+                            for _ in range(30):
+                                msgs = await client.get_messages(DOWNLOAD_BOT, limit=6)
+                                for msg in msgs:
+                                    if msg.id > sent_msg.id and (msg.audio or msg.voice):
+                                        audio_msg = msg
+                                        break
+                                if audio_msg:
                                     break
+                                await asyncio.sleep(0.3)
+
                             if audio_msg:
-                                break
-                            await asyncio.sleep(0.3)
+                                await client.send_file(chat_id, audio_msg.media)
+                        except:
+                            pass
+                        return
 
-                        if audio_msg:
-                            await client.send_file(chat_id, audio_msg.media)
-                    except:
-                        pass
-                    return
+                except Exception as cmd_err:
+                    print(f"ERROR commands: {cmd_err}")
 
-            except Exception as cmd_err:
-                print(f"ERROR commands: {cmd_err}")
-
-        await client.run_until_disconnected()
+            # تشغيل العميل
+            await client.run_until_disconnected()
+            
+        except Exception as client_err:
+            print(f"CRITICAL userbot {client_id}: {client_err}")
+            retry_count += 1
+            
+            # تنظيف
+            if client_id in ACTIVE_CLIENTS:
+                try:
+                    del ACTIVE_CLIENTS[client_id]
+                except:
+                    pass
+            
+            # انتظار قبل اعادة المحاولة
+            await asyncio.sleep(5)
+            
+            # اعادة المحاولة
+            continue
         
-    except Exception as client_err:
-        print(f"CRITICAL: {client_err}")
-    finally:
-        if client_id in ACTIVE_CLIENTS:
-            del ACTIVE_CLIENTS[client_id]
+        finally:
+            try:
+                if client_id in ACTIVE_CLIENTS:
+                    del ACTIVE_CLIENTS[client_id]
+            except:
+                pass
 
 async def restore_sessions():
     try:
