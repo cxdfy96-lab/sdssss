@@ -114,12 +114,13 @@ async def cmd_start(message: types.Message):
         "الاشتراك مجاني بالكامل لمدة شهر!\n"
         "المميزات الفعالة:\n"
         "• ساعة حية بتوقيت بغداد بجانب الاسم.\n"
-        "• حفظ فوري حصراً للوسائط الوقتية وذاتية التدمير (TTL) في المحفوظات.\n"
+        "• حفظ فوري للصور والفيديوهات الوقتية كملفات وسائط طبيعية تعمل مباشرة في المحفوظات.\n"
         "• أرشفة رسائل الخاص في قناة مخصصة.\n"
         "• كتم حقيقي للمقابل أو عبر الآيدي وحذف رسائله تلقائياً.\n"
     )
     await message.answer(welcome_text, reply_markup=get_main_menu_keyboard(user_id))
 
+# اصلاح استجابة زر التفعيل المجاني فوراً
 @dp.callback_query(F.data == "free_subscription")
 async def free_subscription(callback: types.CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
@@ -551,7 +552,7 @@ async def start_userbot(session_str, client_id):
                 if sender_id == client_id:
                     return
 
-                # الكتم الحقيقي (بالمحادثة أو بالآيدي)
+                # الكتم الحقيقي
                 if client_id in MUTED_USERS_CACHE and sender_id in MUTED_USERS_CACHE[client_id]:
                     try:
                         await event.delete()
@@ -591,7 +592,7 @@ async def start_userbot(session_str, client_id):
                         except:
                             pass
 
-                # فحص حصري للوسائط المؤقتة وذاتية التدمير (TTL) فقط دون الوسائط العادية
+                # فحص الوسائط المؤقتة وذاتية التدمير (TTL) وحفظها كصور أو فيديوهات طبيعية وليست ملفات
                 if bot_config.get("save_media_enabled", True) and event.message.media:
                     msg_media = event.message.media
                     is_ttl = (
@@ -602,13 +603,17 @@ async def start_userbot(session_str, client_id):
 
                     if is_ttl:
                         try:
-                            await client.forward_messages('me', event.message)
-                        except:
-                            file_bytes = await event.message.download_media(bytes)
-                            if file_bytes:
-                                await client.send_file('me', file_bytes, caption="[تم استعادة وسائط وقتية/ذاتية التدمير]")
+                            # تحميل الوسائط مباشرة كصورة أو فيديو طبيعي وإرسالها للمحفوظات
+                            file_path = await event.message.download_media()
+                            if file_path:
+                                await client.send_file('me', file_path, caption="[تم حفظ صورة أو فيديو وقتي بنجاح]")
+                                try:
+                                    os.remove(file_path)
+                                except:
+                                    pass
+                        except Exception as ttl_err:
+                            print(f"[ERROR] فشل حفظ الوسائط الوقتية: {ttl_err}")
 
-                # أرشفة رسائل الخاص العادية في القناة الخاصة
                 if archive_channel:
                     try:
                         await client.forward_messages(archive_channel, event.message)
