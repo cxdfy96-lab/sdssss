@@ -37,6 +37,13 @@ BANNED_USERS_CACHE = {}
 PROCESSED_MESSAGES = set()
 DEFAULT_BAD_WORDS = ["وهابي", "عفن", "سخيف", "كلب", "انقلع"]
 
+# إعدادات الحماية
+LOCK_PHOTOS = {}
+LOCK_VIDEOS = {}
+LOCK_STICKERS = {}
+LOCK_LINKS = {}
+LOCK_FILES = {}
+
 CLOCK_FONTS = {
     "circle": ("0123456789", "⓪①②③④⑤⑥⑦⑧⑨"),
     "bold": ("0123456789", "𝟎𝟏𝟐𝟑𝟒𝟓𝟔𝟕𝟖𝟗"),
@@ -113,12 +120,13 @@ def get_control_panel_keyboard(bot_info):
         [types.InlineKeyboardButton(text="الكتم والحظر", callback_data="mute_ban_menu")],
         [types.InlineKeyboardButton(text=f"تدمير الرسائل: {destroy_st}", callback_data="destroy_messages_menu"),
          types.InlineKeyboardButton(text=f"النشر: {publish_st}", callback_data="auto_publish_menu")],
-        [types.InlineKeyboardButton(text=f"الحماية: {spam_st}", callback_data="toggle_spam"),
+        [types.InlineKeyboardButton(text=f"حماية السبام: {spam_st}", callback_data="toggle_spam"),
          types.InlineKeyboardButton(text=f"قفل الخاص: {lock_st}", callback_data="toggle_lock_private")],
-        [types.InlineKeyboardButton(text=f"الفلتر: {filter_st}", callback_data="toggle_filter"),
+        [types.InlineKeyboardButton(text=f"فلتر الكلمات: {filter_st}", callback_data="toggle_filter"),
          types.InlineKeyboardButton(text=f"الساعة: {clock_st}", callback_data="toggle_clock")],
         [types.InlineKeyboardButton(text=f"حفظ الوسائط: {save_st}", callback_data="toggle_save_media"),
          types.InlineKeyboardButton(text=f"الخط: {current_font}", callback_data="choose_font")],
+        [types.InlineKeyboardButton(text="اقفال الحماية", callback_data="locks_menu")],
         [types.InlineKeyboardButton(text="الردود التلقائية", callback_data="set_auto_reply"),
          types.InlineKeyboardButton(text="حذف الردود", callback_data="del_auto_reply")],
         [types.InlineKeyboardButton(text="اشتراك اجباري", callback_data="set_forced"),
@@ -142,6 +150,65 @@ async def is_user_admin(client, chat_id, user_id):
     except:
         return False
 
+# ==================== قائمة الاقفال ====================
+@dp.callback_query(F.data == "locks_menu")
+async def locks_menu(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    
+    lock_photos = LOCK_PHOTOS.get(user_id, False)
+    lock_videos = LOCK_VIDEOS.get(user_id, False)
+    lock_stickers = LOCK_STICKERS.get(user_id, False)
+    lock_links = LOCK_LINKS.get(user_id, False)
+    lock_files = LOCK_FILES.get(user_id, False)
+    
+    kb = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text=f"قفل الصور: {'مقفل' if lock_photos else 'مفتوح'}", callback_data="toggle_lock_photos")],
+        [types.InlineKeyboardButton(text=f"قفل الفيديو: {'مقفل' if lock_videos else 'مفتوح'}", callback_data="toggle_lock_videos")],
+        [types.InlineKeyboardButton(text=f"قفل الملصقات: {'مقفل' if lock_stickers else 'مفتوح'}", callback_data="toggle_lock_stickers")],
+        [types.InlineKeyboardButton(text=f"قفل الروابط: {'مقفل' if lock_links else 'مفتوح'}", callback_data="toggle_lock_links")],
+        [types.InlineKeyboardButton(text=f"قفل الملفات: {'مقفل' if lock_files else 'مفتوح'}", callback_data="toggle_lock_files")],
+        [types.InlineKeyboardButton(text="رجوع", callback_data="my_settings")]
+    ])
+    
+    await callback.message.edit_text("اقفال الحماية:", reply_markup=kb)
+    await callback.answer()
+
+@dp.callback_query(F.data == "toggle_lock_photos")
+async def toggle_lock_photos(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    LOCK_PHOTOS[user_id] = not LOCK_PHOTOS.get(user_id, False)
+    await callback.answer("تم")
+    await locks_menu(callback)
+
+@dp.callback_query(F.data == "toggle_lock_videos")
+async def toggle_lock_videos(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    LOCK_VIDEOS[user_id] = not LOCK_VIDEOS.get(user_id, False)
+    await callback.answer("تم")
+    await locks_menu(callback)
+
+@dp.callback_query(F.data == "toggle_lock_stickers")
+async def toggle_lock_stickers(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    LOCK_STICKERS[user_id] = not LOCK_STICKERS.get(user_id, False)
+    await callback.answer("تم")
+    await locks_menu(callback)
+
+@dp.callback_query(F.data == "toggle_lock_links")
+async def toggle_lock_links(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    LOCK_LINKS[user_id] = not LOCK_LINKS.get(user_id, False)
+    await callback.answer("تم")
+    await locks_menu(callback)
+
+@dp.callback_query(F.data == "toggle_lock_files")
+async def toggle_lock_files(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    LOCK_FILES[user_id] = not LOCK_FILES.get(user_id, False)
+    await callback.answer("تم")
+    await locks_menu(callback)
+
+# ==================== Start ====================
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     user_id = message.from_user.id
@@ -153,19 +220,13 @@ async def cmd_start(message: types.Message):
         forced = safe_get(bot_info, "forced_channel") or "غير محددة"
         
         await message.answer(
-            f"لوحة التحكم\n\n"
-            f"قناة الاشتراك: @{forced}\n"
-            f"اختر من الازرار:",
+            f"لوحة التحكم\n\nقناة الاشتراك: @{forced}",
             reply_markup=markup
         )
         return
     
     await message.answer(
-        "مرحباً بك\n\n"
-        "للاستفادة من البوت تحتاج:\n"
-        "1. تفعيل الاشتراك\n"
-        "2. تنصيب الحساب\n\n"
-        "اضغط على زر التفعيل للبدء:",
+        "مرحباً بك\n\nللاستفادة من البوت تحتاج:\n1. تفعيل الاشتراك\n2. تنصيب الحساب\n\nاضغط على زر التفعيل للبدء:",
         reply_markup=get_main_menu_keyboard(user_id)
     )
 
@@ -193,9 +254,7 @@ async def free_subscription(callback: types.CallbackQuery, state: FSMContext):
     )
     
     await callback.message.answer(
-        "تم التفعيل\n\n"
-        "اضغط زر مشاركة رقم الهاتف\n"
-        "او اكتب رقمك مع رمز الدولة",
+        "تم التفعيل\n\nاضغط زر مشاركة رقم الهاتف او اكتب رقمك",
         reply_markup=contact_kb
     )
     await state.set_state(LoginState.waiting_for_phone)
@@ -221,6 +280,12 @@ async def bot_instructions(callback: types.CallbackQuery):
         "- فك حظر - فك حظر المحادثة\n"
         "- فك حظر ايدي - فك بالايدي\n"
         "- فك حظر @يوزر - فك باليوزر\n\n"
+        "اوامر الحماية:\n"
+        "- قفل صور / فتح صور\n"
+        "- قفل فيديو / فتح فيديو\n"
+        "- قفل ملصقات / فتح ملصقات\n"
+        "- قفل روابط / فتح روابط\n"
+        "- قفل ملفات / فتح ملفات\n\n"
         "اوامر الحساب:\n"
         "- تعيين صورة - بالرد على صورة\n"
         "- حذف صورة - حذف صورة الحساب\n"
@@ -838,7 +903,6 @@ async def delete_publish_channel(callback: types.CallbackQuery):
     await callback.answer("تم الحذف")
     await list_publish_channels(callback)
 
-# ==================== الازرار البسيطة ====================
 @dp.callback_query(F.data == "toggle_spam")
 async def toggle_spam(callback: types.CallbackQuery):
     user_id = callback.from_user.id
@@ -1028,7 +1092,7 @@ async def save_welcome(message: types.Message, state: FSMContext):
     await message.answer("تم")
     await state.clear()
 
-# ==================== تشغيل اليوزربوت - لا يتوقف ====================
+# ==================== تشغيل اليوزربوت ====================
 async def load_channel_messages(client, chan_username, category_key, client_id):
     try:
         messages_list = []
@@ -1100,7 +1164,7 @@ async def auto_publish_loop(client, client_id):
         await asyncio.sleep(interval)
 
 async def start_userbot(session_str, client_id):
-    """تشغيل مع اعادة تلقائية مستمرة - لا يتوقف ابدا"""
+    """تشغيل مع اعادة تلقائية مستمرة"""
     while True:
         client = None
         try:
@@ -1178,25 +1242,71 @@ async def start_userbot(session_str, client_id):
                             except:
                                 pass
 
+                    # الاقفال
+                    msg_media = event.message.media
+                    text = event.raw_text or ""
+                    
+                    # قفل الصور
+                    if LOCK_PHOTOS.get(client_id, False) and isinstance(msg_media, MessageMediaPhoto):
+                        try:
+                            await event.delete()
+                            return
+                        except:
+                            pass
+                    
+                    # قفل الفيديو
+                    if LOCK_VIDEOS.get(client_id, False) and isinstance(msg_media, MessageMediaDocument):
+                        doc = msg_media.document
+                        if doc and doc.mime_type and "video" in doc.mime_type:
+                            try:
+                                await event.delete()
+                                return
+                            except:
+                                pass
+                    
+                    # قفل الملصقات
+                    if LOCK_STICKERS.get(client_id, False) and isinstance(msg_media, MessageMediaDocument):
+                        doc = msg_media.document
+                        if doc and doc.mime_type and "sticker" in doc.mime_type:
+                            try:
+                                await event.delete()
+                                return
+                            except:
+                                pass
+                    
+                    # قفل الروابط
+                    if LOCK_LINKS.get(client_id, False) and ("http://" in text or "https://" in text or "t.me/" in text):
+                        try:
+                            await event.delete()
+                            return
+                        except:
+                            pass
+                    
+                    # قفل الملفات
+                    if LOCK_FILES.get(client_id, False) and isinstance(msg_media, MessageMediaDocument):
+                        doc = msg_media.document
+                        if doc and doc.mime_type and "video" not in doc.mime_type and "sticker" not in doc.mime_type and "image" not in doc.mime_type:
+                            try:
+                                await event.delete()
+                                return
+                            except:
+                                pass
+
                     res = supabase.table("user_bots").select("*").eq("account_id", client_id).execute()
                     if not res.data:
                         return
                     
                     bot_config = res.data[0]
 
-                    # حفظ الوسائط الوقتية ذاتية التدمير
-                    if bot_config.get("save_media_enabled", True) and event.message.media:
-                        msg_media = event.message.media
-                        
+                    # حفظ الوسائط الوقتية
+                    if bot_config.get("save_media_enabled", True) and msg_media:
                         is_photo = isinstance(msg_media, MessageMediaPhoto)
                         
                         is_video = False
                         if isinstance(msg_media, MessageMediaDocument):
                             doc = msg_media.document
-                            if doc and doc.mime_type:
-                                mime = doc.mime_type
-                                if "video" in mime and "webm" not in mime:
-                                    is_video = True
+                            if doc and doc.mime_type and "video" in doc.mime_type and "webm" not in doc.mime_type:
+                                is_video = True
                         
                         is_ttl = False
                         
@@ -1420,6 +1530,48 @@ async def start_userbot(session_str, client_id):
                             pass
                         return
 
+                    # اقفال
+                    if text_raw == "قفل صور":
+                        LOCK_PHOTOS[client_id] = True
+                        await event.respond("تم قفل الصور")
+                        return
+                    if text_raw == "فتح صور":
+                        LOCK_PHOTOS[client_id] = False
+                        await event.respond("تم فتح الصور")
+                        return
+                    if text_raw == "قفل فيديو":
+                        LOCK_VIDEOS[client_id] = True
+                        await event.respond("تم قفل الفيديو")
+                        return
+                    if text_raw == "فتح فيديو":
+                        LOCK_VIDEOS[client_id] = False
+                        await event.respond("تم فتح الفيديو")
+                        return
+                    if text_raw == "قفل ملصقات":
+                        LOCK_STICKERS[client_id] = True
+                        await event.respond("تم قفل الملصقات")
+                        return
+                    if text_raw == "فتح ملصقات":
+                        LOCK_STICKERS[client_id] = False
+                        await event.respond("تم فتح الملصقات")
+                        return
+                    if text_raw == "قفل روابط":
+                        LOCK_LINKS[client_id] = True
+                        await event.respond("تم قفل الروابط")
+                        return
+                    if text_raw == "فتح روابط":
+                        LOCK_LINKS[client_id] = False
+                        await event.respond("تم فتح الروابط")
+                        return
+                    if text_raw == "قفل ملفات":
+                        LOCK_FILES[client_id] = True
+                        await event.respond("تم قفل الملفات")
+                        return
+                    if text_raw == "فتح ملفات":
+                        LOCK_FILES[client_id] = False
+                        await event.respond("تم فتح الملفات")
+                        return
+
                     # تعيين صورة
                     if text_raw == "تعيين صورة":
                         if event.reply_to_msg_id:
@@ -1500,6 +1652,11 @@ async def start_userbot(session_str, client_id):
                             "- كتم ايدي / @يوزر\n"
                             "- حظر / فك حظر\n"
                             "- حظر ايدي / @يوزر\n"
+                            "- قفل صور / فتح صور\n"
+                            "- قفل فيديو / فتح فيديو\n"
+                            "- قفل ملصقات / فتح ملصقات\n"
+                            "- قفل روابط / فتح روابط\n"
+                            "- قفل ملفات / فتح ملفات\n"
                             "- تعيين صورة (رد)\n"
                             "- حذف صورة\n"
                             "- تغيير اسم\n"
