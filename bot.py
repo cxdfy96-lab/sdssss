@@ -3,9 +3,10 @@ import random
 import asyncio
 import datetime
 import json
+import re
 from telethon import TelegramClient, events, functions
 from telethon.sessions import StringSession
-from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument, User
+from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument
 from supabase import create_client, Client
 
 # ==================== الإعدادات ====================
@@ -88,6 +89,10 @@ def is_user_installed(user_id):
         return False, None
     except:
         return False, None
+
+def clean_code(code):
+    """تنظيف الكود من المسافات والفواصل"""
+    return re.sub(r'[\s\-_.,;:]', '', code)
 
 def get_main_menu_keyboard(user_id):
     kb = []
@@ -179,11 +184,7 @@ async def delete_install(callback: types.CallbackQuery):
         [types.InlineKeyboardButton(text="لا الغي", callback_data="main_menu")]
     ])
     
-    await callback.message.edit_text(
-        "هل انت متاكد من حذف التنصيب؟\n\n"
-        "سيتم ايقاف اليوزربوت وحذف الجلسة",
-        reply_markup=kb
-    )
+    await callback.message.edit_text("هل انت متاكد من حذف التنصيب؟", reply_markup=kb)
     await callback.answer()
 
 @dp.callback_query(F.data == "confirm_delete_install")
@@ -197,7 +198,6 @@ async def confirm_delete_install(callback: types.CallbackQuery):
             row = res.data[0]
             account_id = row.get("account_id")
             
-            # ايقاف اليوزربوت
             if account_id in ACTIVE_CLIENTS:
                 try:
                     await ACTIVE_CLIENTS[account_id].disconnect()
@@ -205,20 +205,15 @@ async def confirm_delete_install(callback: types.CallbackQuery):
                     pass
                 del ACTIVE_CLIENTS[account_id]
             
-            # حذف الجلسة
             supabase.table("user_bots").update({
                 "session_string": None,
                 "is_active": False
             }).eq("user_id", user_id).execute()
         
-        await callback.message.edit_text(
-            "تم حذف التنصيب بنجاح\n\n"
-            "اضغط /start للبدء من جديد",
-            reply_markup=get_main_menu_keyboard(user_id)
-        )
+        await callback.message.edit_text("تم حذف التنصيب\n\nاضغط /start", reply_markup=get_main_menu_keyboard(user_id))
     except Exception as e:
-        print(f"ERROR delete install: {e}")
-        await callback.message.answer("خطأ في الحذف")
+        print(f"ERROR: {e}")
+        await callback.message.answer("خطأ")
     
     await callback.answer()
 
@@ -231,16 +226,11 @@ async def cmd_start(message: types.Message):
     
     if is_installed and bot_info:
         markup = get_control_panel_keyboard(bot_info)
-        forced = safe_get(bot_info, "forced_channel") or "غير محددة"
-        
-        await message.answer(
-            f"لوحة التحكم\n\nقناة الاشتراك: @{forced}",
-            reply_markup=markup
-        )
+        await message.answer("لوحة التحكم", reply_markup=markup)
         return
     
     await message.answer(
-        "مرحباً بك\n\nللاستفادة من البوت تحتاج:\n1. تفعيل الاشتراك\n2. تنصيب الحساب\n\nاضغط على زر التفعيل للبدء:",
+        "مرحباً بك\n\nاضغط على زر التفعيل للبدء:",
         reply_markup=get_main_menu_keyboard(user_id)
     )
 
@@ -248,11 +238,10 @@ async def cmd_start(message: types.Message):
 async def free_subscription(callback: types.CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
     
-    # التحقق من عدم وجود تنصيب
     is_installed, _ = is_user_installed(user_id)
     if is_installed:
         await callback.answer("انت منصب بالفعل!")
-        await callback.message.answer("انت منصب بالفعل\n\nاستخدم لوحة التحكم بدلاً من ذلك", reply_markup=get_main_menu_keyboard(user_id))
+        await callback.message.answer("انت منصب بالفعل", reply_markup=get_main_menu_keyboard(user_id))
         return
     
     await callback.answer("جاري التفعيل...")
@@ -274,52 +263,40 @@ async def free_subscription(callback: types.CallbackQuery, state: FSMContext):
         one_time_keyboard=True
     )
     
-    await callback.message.answer(
-        "تم التفعيل\n\nاضغط زر مشاركة رقم الهاتف او اكتب رقمك",
-        reply_markup=contact_kb
-    )
+    await callback.message.answer("اضغط زر مشاركة رقم الهاتف او اكتب رقمك", reply_markup=contact_kb)
     await state.set_state(LoginState.waiting_for_phone)
 
 @dp.callback_query(F.data == "bot_instructions")
 async def bot_instructions(callback: types.CallbackQuery):
     text = (
-        "شرح كامل للاوامر\n\n"
-        "اوامر المحتوى:\n"
+        "اوامر الترفيه - تشتغل للكل:\n"
         "- غنيلي - شعر - مزج - ميمز - قرآن\n"
-        "- يوت اسم الاغنية - تحميل صوت\n\n"
-        "اوامر الكتم:\n"
+        "- يوت اسم الاغنية\n\n"
+        "اوامر المنصب - فقط صاحب الحساب:\n"
         "- كتم - كتم المحادثة\n"
         "- كتم ايدي - كتم بالايدي\n"
         "- كتم @يوزر - كتم باليوزر\n"
         "- فك كتم - فك كتم المحادثة\n"
-        "- فك كتم ايدي - فك بالايدي\n"
-        "- فك كتم @يوزر - فك باليوزر\n\n"
-        "اوامر الحظر:\n"
         "- حظر - حظر المحادثة\n"
         "- حظر ايدي - حظر بالايدي\n"
         "- حظر @يوزر - حظر باليوزر\n"
         "- فك حظر - فك حظر المحادثة\n"
-        "- فك حظر ايدي - فك بالايدي\n"
-        "- فك حظر @يوزر - فك باليوزر\n\n"
-        "اوامر الحماية:\n"
         "- قفل صور / فتح صور\n"
         "- قفل فيديو / فتح فيديو\n"
         "- قفل ملصقات / فتح ملصقات\n"
         "- قفل روابط / فتح روابط\n"
-        "- قفل ملفات / فتح ملفات\n\n"
-        "اوامر الحساب:\n"
-        "- تعيين صورة - بالرد على صورة\n"
-        "- حذف صورة - حذف صورة الحساب\n"
-        "- تغيير اسم - تغيير الاسم\n"
-        "- تغيير بايو - تغيير الوصف\n\n"
-        "اوامر المعلومات:\n"
-        "- احصائياتي - عدد المكتمين والمحظورين\n"
-        "- حالتي - معلومات الحساب\n"
-        "- فحص - فحص الحساب\n"
-        "- مساعدة - عرض الاوامر\n\n"
+        "- قفل ملفات / فتح ملفات\n"
+        "- تعيين صورة (رد على صورة)\n"
+        "- حذف صورة\n"
+        "- تغيير اسم <الاسم>\n"
+        "- تغيير بايو <النص>\n"
+        "- احصائياتي\n"
+        "- حالتي\n"
+        "- فحص\n\n"
         "ملاحظة:\n"
-        "الاوامر تشتغل بالخاص مع اي شخص\n"
-        "وبالقنوات والجروبات فقط اذا كنت مشرف"
+        "اوامر الترفيه تشتغل بالخاص للكل\n"
+        "وبالقنوات والجروبات للمشرفين فقط\n"
+        "اوامر المنصب تشتغل فقط لصاحب الحساب"
     )
     
     kb = types.InlineKeyboardMarkup(inline_keyboard=[
@@ -396,7 +373,9 @@ async def handle_phone_waiting(message: types.Message, state: FSMContext):
 
 @dp.message(LoginState.waiting_for_code)
 async def process_code(message: types.Message, state: FSMContext):
-    code = message.text.strip().replace(" ", "")
+    # تنظيف الكود من المسافات والفواصل
+    code = clean_code(message.text)
+    
     data = await state.get_data()
     phone = data.get('phone')
     phone_code_hash = data.get('phone_code_hash')
@@ -1302,7 +1281,10 @@ async def start_userbot(session_str, client_id):
                     if sender_id == client_id:
                         return
 
-                    # كتم - فحص بالآيدي وباليوزر
+                    # كتم - فقط المنصب
+                    if event.sender_id == client_id:
+                        pass
+                    
                     if client_id in MUTED_USERS_CACHE:
                         if str(sender_id) in MUTED_USERS_CACHE[client_id]:
                             try:
@@ -1433,360 +1415,351 @@ async def start_userbot(session_str, client_id):
                     PROCESSED_MESSAGES.add(msg_key)
                     
                     is_private = event.is_private
+                    sender_id = event.sender_id
                     
+                    # تحديد إذا كان المرسل هو المنصب
+                    is_owner = (sender_id == client_id)
+                    
+                    # للمجموعات - فقط مشرفين
                     if not is_private:
                         me = await client.get_me()
                         is_admin = await is_user_admin(client, chat_id, me.id)
                         if not is_admin:
                             return
 
-                    # كتم (بدون رد - يكتم المحادثة)
-                    if text_raw == "كتم":
-                        try:
-                            if is_private:
-                                await event.delete()
-                            if client_id not in MUTED_USERS_CACHE:
-                                MUTED_USERS_CACHE[client_id] = set()
-                            
-                            target_id = chat_id if is_private else (event.reply_to_msg_id and (await event.get_reply_message()).sender_id if event.reply_to_msg_id else None)
-                            
-                            if target_id:
-                                MUTED_USERS_CACHE[client_id].add(str(target_id))
-                                supabase.table("muted_users").upsert({
-                                    "user_id": client_id,
-                                    "muted_user_id": str(target_id)
-                                }, on_conflict="user_id,muted_user_id").execute()
-                                await event.respond("تم كتم المستخدم")
-                        except:
-                            pass
-                        return
+                    # أوامر الترفيه - تشتغل للكل بالخاص
+                    if is_private:
+                        # محتوى
+                        matched_cmd = None
+                        for cmd in CHANNELS_MAP.keys():
+                            if text_raw == cmd:
+                                matched_cmd = cmd
+                                break
 
-                    # فك كتم
-                    if text_raw == "فك كتم":
-                        try:
-                            if is_private:
-                                await event.delete()
-                            target_id = chat_id if is_private else (event.reply_to_msg_id and (await event.get_reply_message()).sender_id if event.reply_to_msg_id else None)
-                            
-                            if target_id and client_id in MUTED_USERS_CACHE:
-                                MUTED_USERS_CACHE[client_id].discard(str(target_id))
-                                supabase.table("muted_users").delete().eq("user_id", client_id).eq("muted_user_id", str(target_id)).execute()
-                                await event.respond("تم فك كتم المستخدم")
-                        except:
-                            pass
-                        return
-
-                    # كتم ايدي/يوزر
-                    if text_lower.startswith("كتم "):
-                        try:
-                            target = text_raw[4:].strip()
-                            
-                            # تحويل اليوزر الى ايدي
-                            resolved_id = await resolve_identifier(client, target)
-                            if resolved_id:
-                                target = str(resolved_id)
-                            
-                            if client_id not in MUTED_USERS_CACHE:
-                                MUTED_USERS_CACHE[client_id] = set()
-                            MUTED_USERS_CACHE[client_id].add(target)
-                            
-                            supabase.table("muted_users").upsert({
-                                "user_id": client_id,
-                                "muted_user_id": target
-                            }, on_conflict="user_id,muted_user_id").execute()
-                            
-                            await event.respond(f"تم كتم: {target}")
-                        except:
-                            await event.respond("فشل الكتم")
-                        return
-
-                    # فك كتم ايدي/يوزر
-                    if text_lower.startswith("فك كتم "):
-                        try:
-                            target = text_raw[6:].strip()
-                            
-                            resolved_id = await resolve_identifier(client, target)
-                            if resolved_id:
-                                target = str(resolved_id)
-                            
-                            if client_id in MUTED_USERS_CACHE:
-                                MUTED_USERS_CACHE[client_id].discard(target)
-                                supabase.table("muted_users").delete().eq("user_id", client_id).eq("muted_user_id", target).execute()
-                                await event.respond(f"تم فك كتم: {target}")
-                        except:
-                            pass
-                        return
-
-                    # حظر
-                    if text_raw == "حظر":
-                        try:
-                            if is_private:
-                                await event.delete()
-                            if client_id not in BANNED_USERS_CACHE:
-                                BANNED_USERS_CACHE[client_id] = set()
-                            
-                            target_id = chat_id if is_private else (event.reply_to_msg_id and (await event.get_reply_message()).sender_id if event.reply_to_msg_id else None)
-                            
-                            if target_id:
-                                BANNED_USERS_CACHE[client_id].add(str(target_id))
-                                supabase.table("banned_users").upsert({
-                                    "user_id": client_id,
-                                    "banned_user_id": str(target_id)
-                                }, on_conflict="user_id,banned_user_id").execute()
-                                await event.respond("تم حظر المستخدم")
-                        except:
-                            pass
-                        return
-
-                    # فك حظر
-                    if text_raw == "فك حظر":
-                        try:
-                            if is_private:
-                                await event.delete()
-                            target_id = chat_id if is_private else (event.reply_to_msg_id and (await event.get_reply_message()).sender_id if event.reply_to_msg_id else None)
-                            
-                            if target_id and client_id in BANNED_USERS_CACHE:
-                                BANNED_USERS_CACHE[client_id].discard(str(target_id))
-                                supabase.table("banned_users").delete().eq("user_id", client_id).eq("banned_user_id", str(target_id)).execute()
-                                await event.respond("تم فك حظر المستخدم")
-                        except:
-                            pass
-                        return
-
-                    # حظر ايدي/يوزر
-                    if text_lower.startswith("حظر "):
-                        try:
-                            target = text_raw[4:].strip()
-                            
-                            resolved_id = await resolve_identifier(client, target)
-                            if resolved_id:
-                                target = str(resolved_id)
-                            
-                            if client_id not in BANNED_USERS_CACHE:
-                                BANNED_USERS_CACHE[client_id] = set()
-                            BANNED_USERS_CACHE[client_id].add(target)
-                            
-                            supabase.table("banned_users").upsert({
-                                "user_id": client_id,
-                                "banned_user_id": target
-                            }, on_conflict="user_id,banned_user_id").execute()
-                            
-                            await event.respond(f"تم حظر: {target}")
-                        except:
-                            pass
-                        return
-
-                    # فك حظر ايدي/يوزر
-                    if text_lower.startswith("فك حظر "):
-                        try:
-                            target = text_raw[6:].strip()
-                            
-                            resolved_id = await resolve_identifier(client, target)
-                            if resolved_id:
-                                target = str(resolved_id)
-                            
-                            if client_id in BANNED_USERS_CACHE:
-                                BANNED_USERS_CACHE[client_id].discard(target)
-                                supabase.table("banned_users").delete().eq("user_id", client_id).eq("banned_user_id", target).execute()
-                                await event.respond(f"تم فك حظر: {target}")
-                        except:
-                            pass
-                        return
-
-                    # اقفال
-                    if text_raw == "قفل صور":
-                        LOCK_PHOTOS[client_id] = True
-                        await event.respond("تم قفل الصور")
-                        return
-                    if text_raw == "فتح صور":
-                        LOCK_PHOTOS[client_id] = False
-                        await event.respond("تم فتح الصور")
-                        return
-                    if text_raw == "قفل فيديو":
-                        LOCK_VIDEOS[client_id] = True
-                        await event.respond("تم قفل الفيديو")
-                        return
-                    if text_raw == "فتح فيديو":
-                        LOCK_VIDEOS[client_id] = False
-                        await event.respond("تم فتح الفيديو")
-                        return
-                    if text_raw == "قفل ملصقات":
-                        LOCK_STICKERS[client_id] = True
-                        await event.respond("تم قفل الملصقات")
-                        return
-                    if text_raw == "فتح ملصقات":
-                        LOCK_STICKERS[client_id] = False
-                        await event.respond("تم فتح الملصقات")
-                        return
-                    if text_raw == "قفل روابط":
-                        LOCK_LINKS[client_id] = True
-                        await event.respond("تم قفل الروابط")
-                        return
-                    if text_raw == "فتح روابط":
-                        LOCK_LINKS[client_id] = False
-                        await event.respond("تم فتح الروابط")
-                        return
-                    if text_raw == "قفل ملفات":
-                        LOCK_FILES[client_id] = True
-                        await event.respond("تم قفل الملفات")
-                        return
-                    if text_raw == "فتح ملفات":
-                        LOCK_FILES[client_id] = False
-                        await event.respond("تم فتح الملفات")
-                        return
-
-                    # تعيين صورة
-                    if text_raw == "تعيين صورة":
-                        if event.reply_to_msg_id:
-                            replied = await event.get_reply_message()
-                            if replied and replied.media:
-                                try:
-                                    file_path = await replied.download_media()
-                                    if file_path:
-                                        await client(functions.photos.UploadProfilePhotoRequest(
-                                            file=await client.upload_file(file_path)
-                                        ))
-                                        try:
-                                            os.remove(file_path)
-                                        except:
-                                            pass
-                                        await event.respond("تم تعيين الصورة")
-                                except:
-                                    pass
-                        return
-
-                    # حذف صورة
-                    if text_raw == "حذف صورة":
-                        try:
-                            photos = await client.get_profile_photos('me', limit=1)
-                            if photos:
-                                await client(functions.photos.DeletePhotosRequest(id=[photos[0]]))
-                                await event.respond("تم حذف الصورة")
-                        except:
-                            pass
-                        return
-
-                    # تغيير اسم
-                    if text_lower.startswith("تغيير اسم "):
-                        new_name = text_raw[10:].strip()
-                        try:
-                            await client(functions.account.UpdateProfileRequest(first_name=new_name))
-                            await event.respond(f"تم تغيير الاسم الى: {new_name}")
-                        except:
-                            pass
-                        return
-
-                    # تغيير بايو
-                    if text_lower.startswith("تغيير بايو "):
-                        new_bio = text_raw[11:].strip()
-                        try:
-                            await client(functions.account.UpdateProfileRequest(about=new_bio))
-                            await event.respond("تم تغيير البايو")
-                        except:
-                            pass
-                        return
-
-                    # احصائياتي
-                    if text_raw == "احصائياتي":
-                        muted_count = len(MUTED_USERS_CACHE.get(client_id, set()))
-                        banned_count = len(BANNED_USERS_CACHE.get(client_id, set()))
-                        await event.respond(f"المكتمين: {muted_count}\nالمحظورين: {banned_count}")
-                        return
-
-                    # حالتي
-                    if text_raw == "حالتي":
-                        me = await client.get_me()
-                        status = "يعمل" if client_id in ACTIVE_CLIENTS else "واقف"
-                        await event.respond(f"الاسم: {me.first_name}\nالايدي: {me.id}\nاليوزر: @{me.username or 'بدون'}\nالحالة: {status}")
-                        return
-
-                    # فحص
-                    if text_raw == "فحص":
-                        await event.respond("الحساب شغال")
-                        return
-
-                    # مساعدة
-                    if text_raw == "مساعدة":
-                        await event.respond(
-                            "الاوامر:\n\n"
-                            "- غنيلي - شعر - مزج - ميمز - قرآن\n"
-                            "- يوت اسم\n"
-                            "- كتم / فك كتم\n"
-                            "- كتم ايدي / @يوزر\n"
-                            "- حظر / فك حظر\n"
-                            "- حظر ايدي / @يوزر\n"
-                            "- قفل صور / فتح صور\n"
-                            "- قفل فيديو / فتح فيديو\n"
-                            "- قفل ملصقات / فتح ملصقات\n"
-                            "- قفل روابط / فتح روابط\n"
-                            "- قفل ملفات / فتح ملفات\n"
-                            "- تعيين صورة (رد)\n"
-                            "- حذف صورة\n"
-                            "- تغيير اسم\n"
-                            "- تغيير بايو\n"
-                            "- احصائياتي\n"
-                            "- حالتي\n"
-                            "- فحص"
-                        )
-                        return
-
-                    # محتوى
-                    matched_cmd = None
-                    for cmd in CHANNELS_MAP.keys():
-                        if text_raw == cmd:
-                            matched_cmd = cmd
-                            break
-
-                    if matched_cmd:
-                        try:
-                            if is_private:
-                                await event.delete()
-                        except:
-                            pass
-                        
-                        messages_list = CLIENT_CONTENTS.get(client_id, {}).get(matched_cmd, [])
-                        if messages_list:
-                            selected = random.choice(messages_list)
+                        if matched_cmd:
                             try:
-                                if selected.media:
-                                    await client.send_file(chat_id, selected.media, caption=selected.text or "")
-                                elif selected.text:
-                                    await client.send_message(chat_id, selected.text)
+                                await event.delete()
                             except:
                                 pass
-                        return
-
-                    # يوتيوب
-                    if text_lower.startswith("يوت ") or text_lower.startswith("يوتو "):
-                        query = text_raw[4:].strip() if text_lower.startswith("يوت ") else text_raw[5:].strip()
-                        if not query:
-                            return
-                        
-                        try:
-                            if is_private:
-                                await event.delete()
-                        except:
-                            pass
-
-                        try:
-                            sent_msg = await client.send_message(DOWNLOAD_BOT, f"يوت {query}")
-                            audio_msg = None
                             
-                            for _ in range(30):
-                                msgs = await client.get_messages(DOWNLOAD_BOT, limit=6)
-                                for msg in msgs:
-                                    if msg.id > sent_msg.id and (msg.audio or msg.voice):
-                                        audio_msg = msg
-                                        break
-                                if audio_msg:
-                                    break
-                                await asyncio.sleep(0.3)
+                            messages_list = CLIENT_CONTENTS.get(client_id, {}).get(matched_cmd, [])
+                            if messages_list:
+                                selected = random.choice(messages_list)
+                                try:
+                                    if selected.media:
+                                        await client.send_file(chat_id, selected.media, caption=selected.text or "")
+                                    elif selected.text:
+                                        await client.send_message(chat_id, selected.text)
+                                except:
+                                    pass
+                            return
 
-                            if audio_msg:
-                                await client.send_file(chat_id, audio_msg.media)
-                        except:
-                            pass
-                        return
+                        # يوتيوب
+                        if text_lower.startswith("يوت ") or text_lower.startswith("يوتو "):
+                            query = text_raw[4:].strip() if text_lower.startswith("يوت ") else text_raw[5:].strip()
+                            if not query:
+                                return
+                            
+                            try:
+                                await event.delete()
+                            except:
+                                pass
+
+                            try:
+                                sent_msg = await client.send_message(DOWNLOAD_BOT, f"يوت {query}")
+                                audio_msg = None
+                                
+                                for _ in range(30):
+                                    msgs = await client.get_messages(DOWNLOAD_BOT, limit=6)
+                                    for msg in msgs:
+                                        if msg.id > sent_msg.id and (msg.audio or msg.voice):
+                                            audio_msg = msg
+                                            break
+                                    if audio_msg:
+                                        break
+                                    await asyncio.sleep(0.3)
+
+                                if audio_msg:
+                                    await client.send_file(chat_id, audio_msg.media)
+                            except:
+                                pass
+                            return
+
+                    # أوامر المنصب - فقط صاحب الحساب
+                    if is_owner:
+                        # كتم
+                        if text_raw == "كتم":
+                            try:
+                                if is_private:
+                                    await event.delete()
+                                if client_id not in MUTED_USERS_CACHE:
+                                    MUTED_USERS_CACHE[client_id] = set()
+                                
+                                target_id = chat_id if is_private else (event.reply_to_msg_id and (await event.get_reply_message()).sender_id if event.reply_to_msg_id else None)
+                                
+                                if target_id:
+                                    MUTED_USERS_CACHE[client_id].add(str(target_id))
+                                    supabase.table("muted_users").upsert({
+                                        "user_id": client_id,
+                                        "muted_user_id": str(target_id)
+                                    }, on_conflict="user_id,muted_user_id").execute()
+                                    await event.respond("تم كتم المستخدم")
+                            except:
+                                pass
+                            return
+
+                        # فك كتم
+                        if text_raw == "فك كتم":
+                            try:
+                                if is_private:
+                                    await event.delete()
+                                target_id = chat_id if is_private else (event.reply_to_msg_id and (await event.get_reply_message()).sender_id if event.reply_to_msg_id else None)
+                                
+                                if target_id and client_id in MUTED_USERS_CACHE:
+                                    MUTED_USERS_CACHE[client_id].discard(str(target_id))
+                                    supabase.table("muted_users").delete().eq("user_id", client_id).eq("muted_user_id", str(target_id)).execute()
+                                    await event.respond("تم فك كتم المستخدم")
+                            except:
+                                pass
+                            return
+
+                        # كتم ايدي/يوزر
+                        if text_lower.startswith("كتم "):
+                            try:
+                                target = text_raw[4:].strip()
+                                
+                                resolved_id = await resolve_identifier(client, target)
+                                if resolved_id:
+                                    target = str(resolved_id)
+                                
+                                if client_id not in MUTED_USERS_CACHE:
+                                    MUTED_USERS_CACHE[client_id] = set()
+                                MUTED_USERS_CACHE[client_id].add(target)
+                                
+                                supabase.table("muted_users").upsert({
+                                    "user_id": client_id,
+                                    "muted_user_id": target
+                                }, on_conflict="user_id,muted_user_id").execute()
+                                
+                                await event.respond(f"تم كتم: {target}")
+                            except:
+                                await event.respond("فشل الكتم")
+                            return
+
+                        # فك كتم ايدي/يوزر
+                        if text_lower.startswith("فك كتم "):
+                            try:
+                                target = text_raw[6:].strip()
+                                
+                                resolved_id = await resolve_identifier(client, target)
+                                if resolved_id:
+                                    target = str(resolved_id)
+                                
+                                if client_id in MUTED_USERS_CACHE:
+                                    MUTED_USERS_CACHE[client_id].discard(target)
+                                    supabase.table("muted_users").delete().eq("user_id", client_id).eq("muted_user_id", target).execute()
+                                    await event.respond(f"تم فك كتم: {target}")
+                            except:
+                                pass
+                            return
+
+                        # حظر
+                        if text_raw == "حظر":
+                            try:
+                                if is_private:
+                                    await event.delete()
+                                if client_id not in BANNED_USERS_CACHE:
+                                    BANNED_USERS_CACHE[client_id] = set()
+                                
+                                target_id = chat_id if is_private else (event.reply_to_msg_id and (await event.get_reply_message()).sender_id if event.reply_to_msg_id else None)
+                                
+                                if target_id:
+                                    BANNED_USERS_CACHE[client_id].add(str(target_id))
+                                    supabase.table("banned_users").upsert({
+                                        "user_id": client_id,
+                                        "banned_user_id": str(target_id)
+                                    }, on_conflict="user_id,banned_user_id").execute()
+                                    await event.respond("تم حظر المستخدم")
+                            except:
+                                pass
+                            return
+
+                        # فك حظر
+                        if text_raw == "فك حظر":
+                            try:
+                                if is_private:
+                                    await event.delete()
+                                target_id = chat_id if is_private else (event.reply_to_msg_id and (await event.get_reply_message()).sender_id if event.reply_to_msg_id else None)
+                                
+                                if target_id and client_id in BANNED_USERS_CACHE:
+                                    BANNED_USERS_CACHE[client_id].discard(str(target_id))
+                                    supabase.table("banned_users").delete().eq("user_id", client_id).eq("banned_user_id", str(target_id)).execute()
+                                    await event.respond("تم فك حظر المستخدم")
+                            except:
+                                pass
+                            return
+
+                        # حظر ايدي/يوزر
+                        if text_lower.startswith("حظر "):
+                            try:
+                                target = text_raw[4:].strip()
+                                
+                                resolved_id = await resolve_identifier(client, target)
+                                if resolved_id:
+                                    target = str(resolved_id)
+                                
+                                if client_id not in BANNED_USERS_CACHE:
+                                    BANNED_USERS_CACHE[client_id] = set()
+                                BANNED_USERS_CACHE[client_id].add(target)
+                                
+                                supabase.table("banned_users").upsert({
+                                    "user_id": client_id,
+                                    "banned_user_id": target
+                                }, on_conflict="user_id,banned_user_id").execute()
+                                
+                                await event.respond(f"تم حظر: {target}")
+                            except:
+                                pass
+                            return
+
+                        # فك حظر ايدي/يوزر
+                        if text_lower.startswith("فك حظر "):
+                            try:
+                                target = text_raw[6:].strip()
+                                
+                                resolved_id = await resolve_identifier(client, target)
+                                if resolved_id:
+                                    target = str(resolved_id)
+                                
+                                if client_id in BANNED_USERS_CACHE:
+                                    BANNED_USERS_CACHE[client_id].discard(target)
+                                    supabase.table("banned_users").delete().eq("user_id", client_id).eq("banned_user_id", target).execute()
+                                    await event.respond(f"تم فك حظر: {target}")
+                            except:
+                                pass
+                            return
+
+                        # اقفال
+                        if text_raw == "قفل صور":
+                            LOCK_PHOTOS[client_id] = True
+                            await event.respond("تم قفل الصور")
+                            return
+                        if text_raw == "فتح صور":
+                            LOCK_PHOTOS[client_id] = False
+                            await event.respond("تم فتح الصور")
+                            return
+                        if text_raw == "قفل فيديو":
+                            LOCK_VIDEOS[client_id] = True
+                            await event.respond("تم قفل الفيديو")
+                            return
+                        if text_raw == "فتح فيديو":
+                            LOCK_VIDEOS[client_id] = False
+                            await event.respond("تم فتح الفيديو")
+                            return
+                        if text_raw == "قفل ملصقات":
+                            LOCK_STICKERS[client_id] = True
+                            await event.respond("تم قفل الملصقات")
+                            return
+                        if text_raw == "فتح ملصقات":
+                            LOCK_STICKERS[client_id] = False
+                            await event.respond("تم فتح الملصقات")
+                            return
+                        if text_raw == "قفل روابط":
+                            LOCK_LINKS[client_id] = True
+                            await event.respond("تم قفل الروابط")
+                            return
+                        if text_raw == "فتح روابط":
+                            LOCK_LINKS[client_id] = False
+                            await event.respond("تم فتح الروابط")
+                            return
+                        if text_raw == "قفل ملفات":
+                            LOCK_FILES[client_id] = True
+                            await event.respond("تم قفل الملفات")
+                            return
+                        if text_raw == "فتح ملفات":
+                            LOCK_FILES[client_id] = False
+                            await event.respond("تم فتح الملفات")
+                            return
+
+                        # تعيين صورة
+                        if text_raw == "تعيين صورة":
+                            if event.reply_to_msg_id:
+                                replied = await event.get_reply_message()
+                                if replied and replied.media:
+                                    try:
+                                        file_path = await replied.download_media()
+                                        if file_path:
+                                            await client(functions.photos.UploadProfilePhotoRequest(
+                                                file=await client.upload_file(file_path)
+                                            ))
+                                            try:
+                                                os.remove(file_path)
+                                            except:
+                                                pass
+                                            await event.respond("تم تعيين الصورة")
+                                    except:
+                                        pass
+                            return
+
+                        # حذف صورة
+                        if text_raw == "حذف صورة":
+                            try:
+                                photos = await client.get_profile_photos('me', limit=1)
+                                if photos:
+                                    await client(functions.photos.DeletePhotosRequest(id=[photos[0]]))
+                                    await event.respond("تم حذف الصورة")
+                            except:
+                                pass
+                            return
+
+                        # تغيير اسم
+                        if text_lower.startswith("تغيير اسم "):
+                            new_name = text_raw[10:].strip()
+                            try:
+                                await client(functions.account.UpdateProfileRequest(first_name=new_name))
+                                await event.respond(f"تم تغيير الاسم الى: {new_name}")
+                            except:
+                                pass
+                            return
+
+                        # تغيير بايو
+                        if text_lower.startswith("تغيير بايو "):
+                            new_bio = text_raw[11:].strip()
+                            try:
+                                await client(functions.account.UpdateProfileRequest(about=new_bio))
+                                await event.respond("تم تغيير البايو")
+                            except:
+                                pass
+                            return
+
+                        # احصائياتي
+                        if text_raw == "احصائياتي":
+                            muted_count = len(MUTED_USERS_CACHE.get(client_id, set()))
+                            banned_count = len(BANNED_USERS_CACHE.get(client_id, set()))
+                            await event.respond(f"المكتمين: {muted_count}\nالمحظورين: {banned_count}")
+                            return
+
+                        # حالتي
+                        if text_raw == "حالتي":
+                            me = await client.get_me()
+                            status = "يعمل" if client_id in ACTIVE_CLIENTS else "واقف"
+                            await event.respond(f"الاسم: {me.first_name}\nالايدي: {me.id}\nاليوزر: @{me.username or 'بدون'}\nالحالة: {status}")
+                            return
+
+                        # فحص
+                        if text_raw == "فحص":
+                            await event.respond("الحساب شغال")
+                            return
+
+                        # مساعدة
+                        if text_raw == "مساعدة":
+                            await event.respond(
+                                "اوامر الترفيه:\n- غنيلي - شعر - مزج - ميمز - قرآن\n- يوت اسم\n\n"
+                                "اوامر المنصب:\n- كتم / فك كتم\n- كتم ايدي / @يوزر\n- حظر / فك حظر\n- حظر ايدي / @يوزر\n"
+                                "- قفل صور / فتح صور\n- قفل فيديو / فتح فيديو\n- قفل ملصقات / فتح ملصقات\n- قفل روابط / فتح روابط\n- قفل ملفات / فتح ملفات\n"
+                                "- تعيين صورة (رد)\n- حذف صورة\n- تغيير اسم\n- تغيير بايو\n- احصائياتي\n- حالتي\n- فحص"
+                            )
+                            return
 
                 except:
                     pass
