@@ -6,7 +6,7 @@ import json
 import re
 from telethon import TelegramClient, events, functions
 from telethon.sessions import StringSession
-from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument
+from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument, DialogFilter, TextWithEntities
 from supabase import create_client, Client
 
 # ==================== الإعدادات ====================
@@ -36,6 +36,8 @@ CLIENT_CONTENTS = {}
 MUTED_USERS_CACHE = {}
 BANNED_USERS_CACHE = {}
 PROCESSED_MESSAGES = set()
+ARCHIVE_CHANNELS = {}
+ARCHIVE_ENABLED = {}
 DEFAULT_BAD_WORDS = ["وهابي", "عفن", "سخيف", "كلب", "انقلع"]
 
 LOCK_PHOTOS = {}
@@ -91,12 +93,10 @@ def is_user_installed(user_id):
         return False, None
 
 def clean_code(code):
-    """تنظيف الكود من المسافات والفواصل"""
     return re.sub(r'[\s\-_.,;:]', '', code)
 
 def get_main_menu_keyboard(user_id):
     kb = []
-    
     is_installed, _ = is_user_installed(user_id)
     
     if is_installed:
@@ -123,9 +123,11 @@ def get_control_panel_keyboard(bot_info):
     save_st = "مفعل" if safe_get(bot_info, "save_media_enabled", True) else "متوقف"
     lock_st = "مقفل" if safe_get(bot_info, "lock_private_enabled", False) else "مفتوح"
     current_font = safe_get(bot_info, "clock_font", "circle")
+    archive_st = "مفعل" if safe_get(bot_info, "archive_enabled", False) else "متوقف"
 
     kb = [
         [types.InlineKeyboardButton(text="الكتم والحظر", callback_data="mute_ban_menu")],
+        [types.InlineKeyboardButton(text=f"الارشيف: {archive_st}", callback_data="toggle_archive")],
         [types.InlineKeyboardButton(text=f"تدمير الرسائل: {destroy_st}", callback_data="destroy_messages_menu"),
          types.InlineKeyboardButton(text=f"النشر: {publish_st}", callback_data="auto_publish_menu")],
         [types.InlineKeyboardButton(text=f"حماية السبام: {spam_st}", callback_data="toggle_spam"),
@@ -160,7 +162,6 @@ async def is_user_admin(client, chat_id, user_id):
         return False
 
 async def resolve_identifier(client, identifier):
-    """تحويل ايدي او يوزر الى user_id"""
     try:
         identifier = str(identifier).strip()
         if identifier.startswith("@"):
@@ -173,6 +174,119 @@ async def resolve_identifier(client, identifier):
             return entity.id
     except:
         return None
+
+async def get_or_create_archive_folder(client):
+    """إنشاء أو جلب مجلد الأرشيف"""
+    try:
+        folders = await client(functions.messages.GetDialogFiltersRequest())
+        
+        for folder in folders:
+            if hasattr(folder, 'title') and folder.title:
+                title_text = folder.title.text if hasattr(folder.title, 'text') else str(folder.title)
+                if "ارشيف" in title_text:
+                    return folder
+        
+        new_id = random.randint(100, 999)
+        folder = await client(functions.messages.UpdateDialogFilterRequest(
+            id=new_id,
+            folder=DialogFilter(
+                id=new_id,
+                title=TextWithEntities(text="ارشيف المحادثات", entities=[]),
+                include_peers=[],
+                exclude_peers=[],
+                pinned_peers=[],
+                contacts=False,
+                non_contacts=False,
+                groups=False,
+                broadcasts=False,
+                bots=False,
+                exclude_muted=False,
+                exclude_read=False,
+                exclude_archived=False
+            )
+        ))
+        return folder
+    except Exception as e:
+        print(f"Error creating folder: {e}")
+        return None
+
+async def get_or_create_archive_channel(client, client_id, sender_id, sender_name):
+    """إنشاء قناة خاصة لكل مراسل"""
+    try:
+        if not ARCHIVE_ENABLED.get(client_id, False):
+            return None
+        
+        if client_id not in ARCHIVE_CHANNELS:
+            ARCHIVE_CHANNELS[client_id] = {}
+        
+        if sender_id in ARCHIVE_CHANNELS[client_id]:
+            return ARCHIVE_CHANNELS[client_id][sender_id]
+        
+        channel_name = f"{sender_name}"
+        
+        try:
+            result = await client(functions.channels.CreateChannelRequest(
+                title=channel_name,
+                about=f"ارشيف محادثة {sender_name}"
+            ))
+            channel = result.chats[0]
+            
+            try:
+                folder = await get_or_create_archive_folder(client)
+                if folder:
+                    current_peers = list(folder.include_peers) if folder.include_peers else []
+                    current_peers.append(channel)
+                    
+                    await client(functions.messages.UpdateDialogFilterRequest(
+                        id=folder.id,
+                        folder=DialogFilter(
+                            id=folder.id,
+                            title=TextWithEntities(text="ارشيف المحادثات", entities=[]),
+                            include_peers=current_peers,
+                            exclude_peers=[],
+                            pinned_peers=[],
+                            contacts=False,
+                            non_contacts=False,
+                            groups=False,
+                            broadcasts=False,
+                            bots=False,
+                            exclude_muted=False,
+                            exclude_read=False,
+                            exclude_archived=False
+                        )
+                    ))
+            except Exception as e:
+                print(f"Error adding to folder: {e}")
+            
+            ARCHIVE_CHANNELS[client_id][sender_id] = channel
+            return channel
+        except Exception as e:
+            print(f"Error creating channel: {e}")
+            return None
+    except Exception as e:
+        print(f"Error: {e}")
+        return None
+
+# ==================== زر تفعيل/إيقاف الارشيف ====================
+@dp.callback_query(F.data == "toggle_archive")
+async def toggle_archive(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    
+    is_installed, bot_info = is_user_installed(user_id)
+    if not is_installed:
+        await callback.answer("يجب التنصيب اولاً")
+        return
+    
+    account_id = bot_info.get("account_id")
+    
+    current = ARCHIVE_ENABLED.get(account_id, False)
+    ARCHIVE_ENABLED[account_id] = not current
+    
+    # حفظ في قاعدة البيانات
+    supabase.table("user_bots").update({"archive_enabled": not current}).eq("account_id", account_id).execute()
+    
+    await callback.answer(f"الارشيف {'مفعل' if not current else 'متوقف'}")
+    await settings_menu(callback)
 
 # ==================== حذف التنصيب ====================
 @dp.callback_query(F.data == "delete_install")
@@ -306,7 +420,7 @@ async def bot_instructions(callback: types.CallbackQuery):
     await callback.message.edit_text(text, reply_markup=kb)
     await callback.answer()
 
-# ==================== معالجة جهة الاتصال ====================
+# ==================== معالجة جهة الاتصال والكود ====================
 @dp.message(lambda message: message.contact is not None)
 async def handle_contact(message: types.Message, state: FSMContext):
     try:
@@ -324,7 +438,10 @@ async def handle_contact(message: types.Message, state: FSMContext):
         try:
             sent = await client.send_code_request(phone)
             await state.update_data(phone_code_hash=sent.phone_code_hash, client=client)
-            await message.answer("تم ارسال رمز التحقق\n\nارسل الرمز:", reply_markup=types.ReplyKeyboardRemove())
+            await message.answer(
+                "تم ارسال رمز التحقق\n\nارسل الرمز\nمثال: 1 2 3 4 5",
+                reply_markup=types.ReplyKeyboardRemove()
+            )
             await state.set_state(LoginState.waiting_for_code)
         except Exception as e:
             await message.answer(f"خطأ: {e}")
@@ -350,7 +467,10 @@ async def handle_phone_text(message: types.Message, state: FSMContext):
         try:
             sent = await client.send_code_request(phone)
             await state.update_data(phone_code_hash=sent.phone_code_hash, client=client)
-            await message.answer("تم ارسال رمز التحقق\n\nارسل الرمز:", reply_markup=types.ReplyKeyboardRemove())
+            await message.answer(
+                "تم ارسال رمز التحقق\n\nارسل الرمز\nمثال: 1 2 3 4 5",
+                reply_markup=types.ReplyKeyboardRemove()
+            )
             await state.set_state(LoginState.waiting_for_code)
         except Exception as e:
             await message.answer(f"خطأ: {e}")
@@ -373,7 +493,6 @@ async def handle_phone_waiting(message: types.Message, state: FSMContext):
 
 @dp.message(LoginState.waiting_for_code)
 async def process_code(message: types.Message, state: FSMContext):
-    # تنظيف الكود من المسافات والفواصل
     code = clean_code(message.text)
     
     data = await state.get_data()
@@ -401,7 +520,8 @@ async def process_code(message: types.Message, state: FSMContext):
             "save_media_enabled": True,
             "lock_private_enabled": False,
             "clock_font": "circle",
-            "is_approved": True
+            "is_approved": True,
+            "archive_enabled": False
         }
         
         supabase.table("user_bots").upsert(bot_data, on_conflict="user_id").execute()
@@ -452,7 +572,8 @@ async def process_password(message: types.Message, state: FSMContext):
             "save_media_enabled": True,
             "lock_private_enabled": False,
             "clock_font": "circle",
-            "is_approved": True
+            "is_approved": True,
+            "archive_enabled": False
         }
         
         supabase.table("user_bots").upsert(bot_data, on_conflict="user_id").execute()
@@ -1212,14 +1333,10 @@ async def auto_publish_loop(client, client_id):
                                     await client.send_message(target_channel, selected.text)
                             except:
                                 pass
-                
-                interval = bot_config.get("publish_interval", 3600)
-            else:
-                interval = 3600
         except:
-            interval = 3600
+            pass
         
-        await asyncio.sleep(interval)
+        await asyncio.sleep(3600)
 
 async def start_userbot(session_str, client_id):
     """تشغيل مع اعادة تلقائية مستمرة"""
@@ -1229,6 +1346,14 @@ async def start_userbot(session_str, client_id):
             client = TelegramClient(StringSession(session_str), API_ID, API_HASH)
             await client.start()
             ACTIVE_CLIENTS[client_id] = client
+            
+            # تحميل إعداد الأرشيف
+            try:
+                res = supabase.table("user_bots").select("archive_enabled").eq("account_id", client_id).execute()
+                if res.data:
+                    ARCHIVE_ENABLED[client_id] = res.data[0].get("archive_enabled", False)
+            except:
+                pass
             
             for cat, chan in CHANNELS_MAP.items():
                 asyncio.create_task(load_channel_messages(client, chan, cat, client_id))
@@ -1250,23 +1375,6 @@ async def start_userbot(session_str, client_id):
             asyncio.create_task(update_name_with_clock(client, client_id))
             asyncio.create_task(auto_publish_loop(client, client_id))
 
-            archive_channel = None
-            try:
-                dialogs = await client.get_dialogs()
-                for d in dialogs:
-                    if d.name == "ارشيف الرسائل":
-                        archive_channel = d.entity
-                        break
-                
-                if not archive_channel:
-                    result = await client(functions.channels.CreateChannelRequest(
-                        title="ارشيف الرسائل",
-                        about="ارشيف"
-                    ))
-                    archive_channel = result.chats[0]
-            except:
-                pass
-
             @client.on(events.NewMessage(incoming=True))
             async def incoming_handler(event):
                 try:
@@ -1281,10 +1389,6 @@ async def start_userbot(session_str, client_id):
                     if sender_id == client_id:
                         return
 
-                    # كتم - فقط المنصب
-                    if event.sender_id == client_id:
-                        pass
-                    
                     if client_id in MUTED_USERS_CACHE:
                         if str(sender_id) in MUTED_USERS_CACHE[client_id]:
                             try:
@@ -1293,7 +1397,6 @@ async def start_userbot(session_str, client_id):
                             except:
                                 pass
 
-                    # حظر
                     if client_id in BANNED_USERS_CACHE:
                         if str(sender_id) in BANNED_USERS_CACHE[client_id]:
                             try:
@@ -1303,7 +1406,6 @@ async def start_userbot(session_str, client_id):
                             except:
                                 pass
 
-                    # الاقفال
                     msg_media = event.message.media
                     text = event.raw_text or ""
                     
@@ -1338,15 +1440,6 @@ async def start_userbot(session_str, client_id):
                             return
                         except:
                             pass
-                    
-                    if LOCK_FILES.get(client_id, False) and isinstance(msg_media, MessageMediaDocument):
-                        doc = msg_media.document
-                        if doc and doc.mime_type and "video" not in doc.mime_type and "sticker" not in doc.mime_type and "image" not in doc.mime_type:
-                            try:
-                                await event.delete()
-                                return
-                            except:
-                                pass
 
                     res = supabase.table("user_bots").select("*").eq("account_id", client_id).execute()
                     if not res.data:
@@ -1387,19 +1480,23 @@ async def start_userbot(session_str, client_id):
                             except:
                                 pass
 
-                    # ارشفة
-                    if archive_channel:
-                        try:
-                            await client.forward_messages(archive_channel, event.message)
-                        except:
-                            pass
+                    # ارشفة - فقط إذا مفعل
+                    if ARCHIVE_ENABLED.get(client_id, False):
+                        sender_name = sender.first_name if sender else str(sender_id)
+                        archive = await get_or_create_archive_channel(client, client_id, sender_id, sender_name)
+                        
+                        if archive:
+                            try:
+                                await client.forward_messages(archive, event.message)
+                            except:
+                                pass
 
                     # رد تلقائي
                     auto_rep = bot_config.get("auto_reply_text")
                     if auto_rep:
                         await event.reply(auto_rep)
                         
-                except:
+                except Exception as ex:
                     pass
 
             @client.on(events.NewMessage(incoming=True))
@@ -1416,20 +1513,16 @@ async def start_userbot(session_str, client_id):
                     
                     is_private = event.is_private
                     sender_id = event.sender_id
-                    
-                    # تحديد إذا كان المرسل هو المنصب
                     is_owner = (sender_id == client_id)
                     
-                    # للمجموعات - فقط مشرفين
                     if not is_private:
                         me = await client.get_me()
                         is_admin = await is_user_admin(client, chat_id, me.id)
                         if not is_admin:
                             return
 
-                    # أوامر الترفيه - تشتغل للكل بالخاص
+                    # أوامر الترفيه - للكل بالخاص
                     if is_private:
-                        # محتوى
                         matched_cmd = None
                         for cmd in CHANNELS_MAP.keys():
                             if text_raw == cmd:
@@ -1454,7 +1547,6 @@ async def start_userbot(session_str, client_id):
                                     pass
                             return
 
-                        # يوتيوب
                         if text_lower.startswith("يوت ") or text_lower.startswith("يوتو "):
                             query = text_raw[4:].strip() if text_lower.startswith("يوت ") else text_raw[5:].strip()
                             if not query:
@@ -1485,9 +1577,8 @@ async def start_userbot(session_str, client_id):
                                 pass
                             return
 
-                    # أوامر المنصب - فقط صاحب الحساب
+                    # أوامر المنصب
                     if is_owner:
-                        # كتم
                         if text_raw == "كتم":
                             try:
                                 if is_private:
@@ -1508,7 +1599,6 @@ async def start_userbot(session_str, client_id):
                                 pass
                             return
 
-                        # فك كتم
                         if text_raw == "فك كتم":
                             try:
                                 if is_private:
@@ -1523,11 +1613,9 @@ async def start_userbot(session_str, client_id):
                                 pass
                             return
 
-                        # كتم ايدي/يوزر
                         if text_lower.startswith("كتم "):
                             try:
                                 target = text_raw[4:].strip()
-                                
                                 resolved_id = await resolve_identifier(client, target)
                                 if resolved_id:
                                     target = str(resolved_id)
@@ -1543,14 +1631,12 @@ async def start_userbot(session_str, client_id):
                                 
                                 await event.respond(f"تم كتم: {target}")
                             except:
-                                await event.respond("فشل الكتم")
+                                pass
                             return
 
-                        # فك كتم ايدي/يوزر
                         if text_lower.startswith("فك كتم "):
                             try:
                                 target = text_raw[6:].strip()
-                                
                                 resolved_id = await resolve_identifier(client, target)
                                 if resolved_id:
                                     target = str(resolved_id)
@@ -1563,7 +1649,6 @@ async def start_userbot(session_str, client_id):
                                 pass
                             return
 
-                        # حظر
                         if text_raw == "حظر":
                             try:
                                 if is_private:
@@ -1584,7 +1669,6 @@ async def start_userbot(session_str, client_id):
                                 pass
                             return
 
-                        # فك حظر
                         if text_raw == "فك حظر":
                             try:
                                 if is_private:
@@ -1599,11 +1683,9 @@ async def start_userbot(session_str, client_id):
                                 pass
                             return
 
-                        # حظر ايدي/يوزر
                         if text_lower.startswith("حظر "):
                             try:
                                 target = text_raw[4:].strip()
-                                
                                 resolved_id = await resolve_identifier(client, target)
                                 if resolved_id:
                                     target = str(resolved_id)
@@ -1622,11 +1704,9 @@ async def start_userbot(session_str, client_id):
                                 pass
                             return
 
-                        # فك حظر ايدي/يوزر
                         if text_lower.startswith("فك حظر "):
                             try:
                                 target = text_raw[6:].strip()
-                                
                                 resolved_id = await resolve_identifier(client, target)
                                 if resolved_id:
                                     target = str(resolved_id)
@@ -1639,7 +1719,6 @@ async def start_userbot(session_str, client_id):
                                 pass
                             return
 
-                        # اقفال
                         if text_raw == "قفل صور":
                             LOCK_PHOTOS[client_id] = True
                             await event.respond("تم قفل الصور")
@@ -1681,7 +1760,6 @@ async def start_userbot(session_str, client_id):
                             await event.respond("تم فتح الملفات")
                             return
 
-                        # تعيين صورة
                         if text_raw == "تعيين صورة":
                             if event.reply_to_msg_id:
                                 replied = await event.get_reply_message()
@@ -1701,7 +1779,6 @@ async def start_userbot(session_str, client_id):
                                         pass
                             return
 
-                        # حذف صورة
                         if text_raw == "حذف صورة":
                             try:
                                 photos = await client.get_profile_photos('me', limit=1)
@@ -1712,7 +1789,6 @@ async def start_userbot(session_str, client_id):
                                 pass
                             return
 
-                        # تغيير اسم
                         if text_lower.startswith("تغيير اسم "):
                             new_name = text_raw[10:].strip()
                             try:
@@ -1722,7 +1798,6 @@ async def start_userbot(session_str, client_id):
                                 pass
                             return
 
-                        # تغيير بايو
                         if text_lower.startswith("تغيير بايو "):
                             new_bio = text_raw[11:].strip()
                             try:
@@ -1732,36 +1807,23 @@ async def start_userbot(session_str, client_id):
                                 pass
                             return
 
-                        # احصائياتي
                         if text_raw == "احصائياتي":
                             muted_count = len(MUTED_USERS_CACHE.get(client_id, set()))
                             banned_count = len(BANNED_USERS_CACHE.get(client_id, set()))
                             await event.respond(f"المكتمين: {muted_count}\nالمحظورين: {banned_count}")
                             return
 
-                        # حالتي
                         if text_raw == "حالتي":
                             me = await client.get_me()
                             status = "يعمل" if client_id in ACTIVE_CLIENTS else "واقف"
                             await event.respond(f"الاسم: {me.first_name}\nالايدي: {me.id}\nاليوزر: @{me.username or 'بدون'}\nالحالة: {status}")
                             return
 
-                        # فحص
                         if text_raw == "فحص":
                             await event.respond("الحساب شغال")
                             return
 
-                        # مساعدة
-                        if text_raw == "مساعدة":
-                            await event.respond(
-                                "اوامر الترفيه:\n- غنيلي - شعر - مزج - ميمز - قرآن\n- يوت اسم\n\n"
-                                "اوامر المنصب:\n- كتم / فك كتم\n- كتم ايدي / @يوزر\n- حظر / فك حظر\n- حظر ايدي / @يوزر\n"
-                                "- قفل صور / فتح صور\n- قفل فيديو / فتح فيديو\n- قفل ملصقات / فتح ملصقات\n- قفل روابط / فتح روابط\n- قفل ملفات / فتح ملفات\n"
-                                "- تعيين صورة (رد)\n- حذف صورة\n- تغيير اسم\n- تغيير بايو\n- احصائياتي\n- حالتي\n- فحص"
-                            )
-                            return
-
-                except:
+                except Exception as ex:
                     pass
 
             await client.run_until_disconnected()
