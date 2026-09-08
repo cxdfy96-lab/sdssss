@@ -446,12 +446,12 @@ async def toggle_lock(callback: types.CallbackQuery):
 @dp.callback_query(F.data == "mute_ban_menu")
 async def mute_ban_menu(callback: types.CallbackQuery):
     kb = types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text="كتم", callback_data="mute_user"),
-         types.InlineKeyboardButton(text="فك كتم", callback_data="unmute_user")],
-        [types.InlineKeyboardButton(text="حظر", callback_data="ban_user"),
-         types.InlineKeyboardButton(text="فك حظر", callback_data="unban_user")],
-        [types.InlineKeyboardButton(text="المكتمين", callback_data="list_muted"),
-         types.InlineKeyboardButton(text="المحظورين", callback_data="list_banned")],
+        [types.InlineKeyboardButton(text="كتم", callback_data="mute_user")],
+        [types.InlineKeyboardButton(text="فك كتم", callback_data="unmute_user")],
+        [types.InlineKeyboardButton(text="حظر", callback_data="ban_user")],
+        [types.InlineKeyboardButton(text="فك حظر", callback_data="unban_user")],
+        [types.InlineKeyboardButton(text="المكتمين", callback_data="list_muted")],
+        [types.InlineKeyboardButton(text="المحظورين", callback_data="list_banned")],
         [types.InlineKeyboardButton(text="رجوع", callback_data="my_settings")]
     ])
     await callback.message.edit_text("الكتم والحظر:", reply_markup=kb)
@@ -702,7 +702,9 @@ async def load_channel_messages(client, chan, cat, cid):
             if m.text or m.media:
                 msgs.append(m)
         CLIENT_CONTENTS.setdefault(cid, {})[cat] = msgs
-    except: passasync def start_userbot(session_str, client_id):
+    except: pass
+
+async def start_userbot(session_str, client_id):
     while True:
         client = None
         try:
