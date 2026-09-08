@@ -357,6 +357,7 @@ async def handle_custom_text(message: types.Message, state: FSMContext):
 # ==================== تنصيب البوت ====================
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
+    print(f"✅ Start received from {message.from_user.id}")
     user_id = message.from_user.id
     is_installed, bot_info = is_user_installed(user_id)
     
@@ -377,6 +378,10 @@ async def cmd_start(message: types.Message):
             "يمكنك تفعيل الاشتراك المجاني لمدة شهر اولاً",
             reply_markup=get_main_menu_keyboard(user_id)
         )
+
+@dp.message(Command("test"))
+async def test_bot(message: types.Message):
+    await message.answer("✅ البوت شغال!")
 
 @dp.callback_query(F.data == "free_subscription_install")
 async def free_subscription_install(callback: types.CallbackQuery, state: FSMContext):
@@ -1228,14 +1233,25 @@ async def restore_sessions():
     except: pass
 
 async def main():
+    # منع التعارض - حذف الويب هوك
     try:
         await bot.delete_webhook(drop_pending_updates=True)
-    except:
-        pass
+        print("✅ Webhook cleared")
+    except Exception as e:
+        print(f"⚠️ Webhook error: {e}")
     
+    # استعادة الجلسات
     await restore_sessions()
-    print("Bot started")
-    await dp.start_polling(bot)
+    
+    print("✅ Bot started successfully!")
+    
+    # بدء البولينغ
+    try:
+        await dp.start_polling(bot)
+    except Exception as e:
+        print(f"❌ Polling error: {e}")
+        await asyncio.sleep(5)
+        await main()
 
 if __name__ == "__main__":
     try:
@@ -1243,5 +1259,5 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("Bot stopped")
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"❌ Fatal error: {e}")
         asyncio.run(main())
