@@ -39,6 +39,27 @@ BANNED_USERS_CACHE = {}
 PROCESSED_MESSAGES = set()
 DEFAULT_BAD_WORDS = ["وهابي", "عفن", "سخيف", "كلب", "انقلع"]
 
+# الأرشفة
+ARCHIVE_SINGLE_ENABLED = {}
+ARCHIVE_PER_USER_ENABLED = {}
+ARCHIVE_CHANNELS = {}
+ARCHIVE_USER_CHANNELS = {}
+
+# الأقفال
+LOCK_PHOTOS = {}
+LOCK_VIDEOS = {}
+LOCK_STICKERS = {}
+LOCK_LINKS = {}
+LOCK_FILES = {}
+LOCK_AUDIO = {}
+LOCK_GIFS = {}
+LOCK_FORWARDS = {}
+LOCK_NUMBERS = {}
+LOCK_ENGLISH = {}
+
+BUSY_MODE = {}
+BUSY_MESSAGE = {}
+
 CLOCK_FONTS = {
     "circle": ("0123456789", "⓪①②③④⑤⑥⑦⑧⑨"),
     "bold": ("0123456789", "𝟎𝟏𝟐𝟑𝟒𝟓𝟔𝟕𝟖𝟗"),
@@ -128,11 +149,11 @@ def get_control_panel_keyboard(bot_info):
     save_st = "مفعل" if safe_get(bot_info, "save_media_enabled", True) else "متوقف"
     lock_st = "مقفل" if safe_get(bot_info, "lock_private_enabled", False) else "مفتوح"
     current_font = safe_get(bot_info, "clock_font", "circle")
-    archive_st = "مفعل" if safe_get(bot_info, "archive_enabled", False) else "متوقف"
 
     kb = [
         [types.InlineKeyboardButton(text="الكتم والحظر", callback_data="mute_ban_menu")],
-        [types.InlineKeyboardButton(text=f"الارشيف: {archive_st}", callback_data="toggle_archive")],
+        [types.InlineKeyboardButton(text="ارشيف عام", callback_data="toggle_archive_single")],
+        [types.InlineKeyboardButton(text="ارشيف لكل شخص", callback_data="toggle_archive_per_user")],
         [types.InlineKeyboardButton(text="اقفال الحماية", callback_data="locks_menu")],
         [types.InlineKeyboardButton(text=f"تدمير الرسائل: {destroy_st}", callback_data="destroy_messages_menu"),
          types.InlineKeyboardButton(text=f"النشر: {publish_st}", callback_data="auto_publish_menu")],
@@ -140,7 +161,7 @@ def get_control_panel_keyboard(bot_info):
          types.InlineKeyboardButton(text=f"قفل الخاص: {lock_st}", callback_data="toggle_lock_private")],
         [types.InlineKeyboardButton(text=f"فلتر الكلمات: {filter_st}", callback_data="toggle_filter"),
          types.InlineKeyboardButton(text=f"الساعة: {clock_st}", callback_data="toggle_clock")],
-        [types.InlineKeyboardButton(text=f"حفظ الوسائط ذاتية التدمير: {save_st}", callback_data="toggle_save_media"),
+        [types.InlineKeyboardButton(text=f"حفظ الوقتيات: {save_st}", callback_data="toggle_save_media"),
          types.InlineKeyboardButton(text=f"الخط: {current_font}", callback_data="choose_font")],
         [types.InlineKeyboardButton(text="الردود التلقائية", callback_data="set_auto_reply"),
          types.InlineKeyboardButton(text="حذف الردود", callback_data="del_auto_reply")],
@@ -168,6 +189,33 @@ async def resolve_identifier(client, identifier):
         elif identifier.isdigit(): return int(identifier)
         return (await client.get_entity(identifier)).id
     except: return None
+
+# ==================== أزرار الأرشيف ====================
+@dp.callback_query(F.data == "toggle_archive_single")
+async def toggle_archive_single(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    res = supabase.table("user_bots").select("*").or_(f"user_id.eq.{user_id},account_id.eq.{user_id}").execute()
+    if not res.data:
+        await callback.answer("يجب التنصيب")
+        return
+    account_id = res.data[0].get("account_id")
+    current = ARCHIVE_SINGLE_ENABLED.get(account_id, False)
+    ARCHIVE_SINGLE_ENABLED[account_id] = not current
+    await callback.answer(f"ارشيف عام {'مفعل' if not current else 'متوقف'}")
+    await settings_menu(callback)
+
+@dp.callback_query(F.data == "toggle_archive_per_user")
+async def toggle_archive_per_user(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    res = supabase.table("user_bots").select("*").or_(f"user_id.eq.{user_id},account_id.eq.{user_id}").execute()
+    if not res.data:
+        await callback.answer("يجب التنصيب")
+        return
+    account_id = res.data[0].get("account_id")
+    current = ARCHIVE_PER_USER_ENABLED.get(account_id, False)
+    ARCHIVE_PER_USER_ENABLED[account_id] = not current
+    await callback.answer(f"ارشيف لكل شخص {'مفعل' if not current else 'متوقف'}")
+    await settings_menu(callback)
 
 # ==================== Start ====================
 @dp.message(Command("start"))
@@ -222,7 +270,7 @@ async def bot_instructions(callback: types.CallbackQuery):
     text = (
         "اوامر الترفيه - للكل:\n- غنيلي - شعر - مزج - ميمز - قرآن\n- يوت اسم\n\n"
         "الكتم والحظر:\n- كتم / فك كتم\n- كتم ايدي / @يوزر\n- حظر / فك حظر\n- حظر ايدي / @يوزر\n\n"
-        "الاقفال:\n- قفل صور / فتح صور\n- قفل فيديو / فتح فيديو\n- قفل ملصقات / فتح ملصقات\n- قفل روابط / فتح روابط\n- قفل ملفات / فتح ملفات\n- قفل صوت / فتح صوت\n- قفل متحركة / فتح متحركة\n- قفل توجيه / فتح توجيه\n- قفل ارقام / فتح ارقام\n- قفل انجليزي / فتح انجليزي\n\n"
+        "الاقفال:\n- قفل صور / فتح صور\n- قفل فيديو / فتح فيديو\n- قفل ملصقات / فتح ملصقات\n- قفل روابط / فتح روابط\n- قفل صوت / فتح صوت\n- قفل توجيه / فتح توجيه\n- قفل ارقام / فتح ارقام\n- قفل انجليزي / فتح انجليزي\n\n"
         "الارسال:\n- كرر عدد نص\n- اذاعة نص\n- بعد ثواني نص\n\n"
         "الحالة:\n- مشغول / متاح\n\n"
         "الحساب:\n- تعيين صورة (رد)\n- حذف صورة\n- تغيير اسم\n- تغيير بايو\n- احصائياتي\n- حالتي\n- فحص"
@@ -608,17 +656,6 @@ async def unban(callback: types.CallbackQuery):
     await list_banned(callback)
 
 # ==================== الأقفال ====================
-LOCK_PHOTOS = {}
-LOCK_VIDEOS = {}
-LOCK_STICKERS = {}
-LOCK_LINKS = {}
-LOCK_FILES = {}
-LOCK_AUDIO = {}
-LOCK_GIFS = {}
-LOCK_FORWARDS = {}
-LOCK_NUMBERS = {}
-LOCK_ENGLISH = {}
-
 @dp.callback_query(F.data == "locks_menu")
 async def locks_menu(callback: types.CallbackQuery):
     uid = callback.from_user.id
@@ -665,17 +702,6 @@ async def tlfo(callback: types.CallbackQuery):
     await locks_menu(callback)
 
 # ==================== أزرار بسيطة ====================
-@dp.callback_query(F.data == "toggle_archive")
-async def toggle_archive(callback: types.CallbackQuery):
-    uid = callback.from_user.id
-    is_installed, bot_info = is_user_installed(uid)
-    if is_installed:
-        aid = bot_info["account_id"]
-        ARCHIVE_ENABLED[aid] = not ARCHIVE_ENABLED.get(aid, False)
-        supabase.table("user_bots").update({"archive_enabled": ARCHIVE_ENABLED[aid]}).eq("account_id", aid).execute()
-        await callback.answer(f"الارشيف {'مفعل' if ARCHIVE_ENABLED[aid] else 'متوقف'}")
-        await settings_menu(callback)
-
 @dp.callback_query(F.data == "toggle_save_media")
 async def toggle_save_media(callback: types.CallbackQuery):
     uid = callback.from_user.id
@@ -1050,7 +1076,6 @@ async def start_userbot(session_str, client_id):
             for cat, chan in CHANNELS_MAP.items():
                 asyncio.create_task(load_channel_messages(client, chan, cat, client_id))
             
-            # تشغيل الساعة
             asyncio.create_task(update_name_with_clock(client, client_id))
             
             try:
@@ -1075,7 +1100,7 @@ async def start_userbot(session_str, client_id):
                     if msg_key in PROCESSED_MESSAGES: return
                     PROCESSED_MESSAGES.add(msg_key)
                     
-                    # ترفيه
+                    # ترفيه - للكل
                     if is_private:
                         matched = None
                         for cmd in CHANNELS_MAP:
@@ -1307,6 +1332,8 @@ async def start_userbot(session_str, client_id):
                     else:
                         if is_private:
                             sender_id = event.sender_id
+                            sender = await event.get_sender()
+                            
                             if BUSY_MODE.get(client_id, False):
                                 await event.reply(BUSY_MESSAGE.get(client_id, "مشغول"))
                                 return
@@ -1360,6 +1387,33 @@ async def start_userbot(session_str, client_id):
                                 try: await event.delete()
                                 except: pass
                                 return
+                            
+                            # أرشيف عام - قناة واحدة
+                            if ARCHIVE_SINGLE_ENABLED.get(client_id, False):
+                                try:
+                                    if client_id not in ARCHIVE_CHANNELS:
+                                        result = await client(functions.channels.CreateChannelRequest(
+                                            title="ارشيف الرسائل",
+                                            about="جميع الرسائل"
+                                        ))
+                                        ARCHIVE_CHANNELS[client_id] = result.chats[0]
+                                    await client.forward_messages(ARCHIVE_CHANNELS[client_id], event.message)
+                                except: pass
+                            
+                            # أرشيف لكل شخص - قناة باسمه
+                            if ARCHIVE_PER_USER_ENABLED.get(client_id, False):
+                                try:
+                                    if client_id not in ARCHIVE_USER_CHANNELS:
+                                        ARCHIVE_USER_CHANNELS[client_id] = {}
+                                    if sender_id not in ARCHIVE_USER_CHANNELS[client_id]:
+                                        sender_name = sender.first_name if sender else str(sender_id)
+                                        result = await client(functions.channels.CreateChannelRequest(
+                                            title=f"{sender_name}",
+                                            about=f"ارشيف {sender_name}"
+                                        ))
+                                        ARCHIVE_USER_CHANNELS[client_id][sender_id] = result.chats[0]
+                                    await client.forward_messages(ARCHIVE_USER_CHANNELS[client_id][sender_id], event.message)
+                                except: pass
                             
                             # حفظ فقط الوسائط ذاتية التدمير
                             res = supabase.table("user_bots").select("save_media_enabled").eq("account_id", client_id).execute()
