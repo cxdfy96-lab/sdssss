@@ -31,7 +31,6 @@ API_HASH = os.environ.get("API_HASH", "")
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
-WEB_APP_URL = os.environ.get("WEB_APP_URL", "")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
