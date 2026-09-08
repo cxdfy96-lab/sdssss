@@ -37,22 +37,7 @@ CLIENT_CONTENTS = {}
 MUTED_USERS_CACHE = {}
 BANNED_USERS_CACHE = {}
 PROCESSED_MESSAGES = set()
-ARCHIVE_ENABLED = {}
 DEFAULT_BAD_WORDS = ["وهابي", "عفن", "سخيف", "كلب", "انقلع"]
-
-LOCK_PHOTOS = {}
-LOCK_VIDEOS = {}
-LOCK_STICKERS = {}
-LOCK_LINKS = {}
-LOCK_FILES = {}
-LOCK_AUDIO = {}
-LOCK_GIFS = {}
-LOCK_FORWARDS = {}
-LOCK_NUMBERS = {}
-LOCK_ENGLISH = {}
-
-BUSY_MODE = {}
-BUSY_MESSAGE = {}
 
 CLOCK_FONTS = {
     "circle": ("0123456789", "⓪①②③④⑤⑥⑦⑧⑨"),
@@ -155,7 +140,7 @@ def get_control_panel_keyboard(bot_info):
          types.InlineKeyboardButton(text=f"قفل الخاص: {lock_st}", callback_data="toggle_lock_private")],
         [types.InlineKeyboardButton(text=f"فلتر الكلمات: {filter_st}", callback_data="toggle_filter"),
          types.InlineKeyboardButton(text=f"الساعة: {clock_st}", callback_data="toggle_clock")],
-        [types.InlineKeyboardButton(text=f"حفظ الوسائط الوقتية: {save_st}", callback_data="toggle_save_media"),
+        [types.InlineKeyboardButton(text=f"حفظ الوسائط ذاتية التدمير: {save_st}", callback_data="toggle_save_media"),
          types.InlineKeyboardButton(text=f"الخط: {current_font}", callback_data="choose_font")],
         [types.InlineKeyboardButton(text="الردود التلقائية", callback_data="set_auto_reply"),
          types.InlineKeyboardButton(text="حذف الردود", callback_data="del_auto_reply")],
@@ -622,7 +607,18 @@ async def unban(callback: types.CallbackQuery):
     BANNED_USERS_CACHE.get(uid, set()).discard(target)
     await list_banned(callback)
 
-# ==================== الاقفال ====================
+# ==================== الأقفال ====================
+LOCK_PHOTOS = {}
+LOCK_VIDEOS = {}
+LOCK_STICKERS = {}
+LOCK_LINKS = {}
+LOCK_FILES = {}
+LOCK_AUDIO = {}
+LOCK_GIFS = {}
+LOCK_FORWARDS = {}
+LOCK_NUMBERS = {}
+LOCK_ENGLISH = {}
+
 @dp.callback_query(F.data == "locks_menu")
 async def locks_menu(callback: types.CallbackQuery):
     uid = callback.from_user.id
@@ -631,13 +627,11 @@ async def locks_menu(callback: types.CallbackQuery):
          types.InlineKeyboardButton(text=f"فيديو: {'مقفل' if LOCK_VIDEOS.get(uid) else 'مفتوح'}", callback_data="toggle_lock_videos")],
         [types.InlineKeyboardButton(text=f"ملصقات: {'مقفل' if LOCK_STICKERS.get(uid) else 'مفتوح'}", callback_data="toggle_lock_stickers"),
          types.InlineKeyboardButton(text=f"روابط: {'مقفل' if LOCK_LINKS.get(uid) else 'مفتوح'}", callback_data="toggle_lock_links")],
-        [types.InlineKeyboardButton(text=f"ملفات: {'مقفل' if LOCK_FILES.get(uid) else 'مفتوح'}", callback_data="toggle_lock_files"),
-         types.InlineKeyboardButton(text=f"صوت: {'مقفل' if LOCK_AUDIO.get(uid) else 'مفتوح'}", callback_data="toggle_lock_audio")],
-        [types.InlineKeyboardButton(text=f"متحركة: {'مقفل' if LOCK_GIFS.get(uid) else 'مفتوح'}", callback_data="toggle_lock_gifs"),
+        [types.InlineKeyboardButton(text=f"صوت: {'مقفل' if LOCK_AUDIO.get(uid) else 'مفتوح'}", callback_data="toggle_lock_audio"),
          types.InlineKeyboardButton(text=f"توجيه: {'مقفل' if LOCK_FORWARDS.get(uid) else 'مفتوح'}", callback_data="toggle_lock_forwards")],
         [types.InlineKeyboardButton(text="رجوع", callback_data="my_settings")]
     ])
-    await callback.message.edit_text("اقفال الحماية:", reply_markup=kb)
+    await callback.message.edit_text("الأقفال:", reply_markup=kb)
     await callback.answer()
 
 @dp.callback_query(F.data == "toggle_lock_photos")
@@ -660,19 +654,9 @@ async def tll(callback: types.CallbackQuery):
     LOCK_LINKS[callback.from_user.id] = not LOCK_LINKS.get(callback.from_user.id, False)
     await locks_menu(callback)
 
-@dp.callback_query(F.data == "toggle_lock_files")
-async def tlf(callback: types.CallbackQuery):
-    LOCK_FILES[callback.from_user.id] = not LOCK_FILES.get(callback.from_user.id, False)
-    await locks_menu(callback)
-
 @dp.callback_query(F.data == "toggle_lock_audio")
 async def tla(callback: types.CallbackQuery):
     LOCK_AUDIO[callback.from_user.id] = not LOCK_AUDIO.get(callback.from_user.id, False)
-    await locks_menu(callback)
-
-@dp.callback_query(F.data == "toggle_lock_gifs")
-async def tlg(callback: types.CallbackQuery):
-    LOCK_GIFS[callback.from_user.id] = not LOCK_GIFS.get(callback.from_user.id, False)
     await locks_menu(callback)
 
 @dp.callback_query(F.data == "toggle_lock_forwards")
@@ -1036,6 +1020,25 @@ async def load_channel_messages(client, chan, cat, cid):
         CLIENT_CONTENTS.setdefault(cid, {})[cat] = msgs
     except: pass
 
+async def update_name_with_clock(client, client_id):
+    while True:
+        try:
+            res = supabase.table("user_bots").select("clock_enabled, clock_font").eq("account_id", client_id).execute()
+            if res.data and res.data[0].get("clock_enabled"):
+                config = res.data[0]
+                font_key = config.get("clock_font", "circle")
+                normal_digits, styled_digits = CLOCK_FONTS.get(font_key, CLOCK_FONTS["circle"])
+                baghdad_time = datetime.datetime.utcnow() + datetime.timedelta(hours=3)
+                now = baghdad_time.strftime("%H:%M")
+                styled_time = now.translate(str.maketrans(normal_digits, styled_digits))
+                me = await client.get_me()
+                base_name = me.first_name.split(" | ")[0].strip()
+                new_name = f"{base_name} | {styled_time}"
+                await client(functions.account.UpdateProfileRequest(first_name=new_name))
+        except Exception as e:
+            print(f"Clock: {e}")
+        await asyncio.sleep(60)
+
 async def start_userbot(session_str, client_id):
     while True:
         client = None
@@ -1046,6 +1049,9 @@ async def start_userbot(session_str, client_id):
             
             for cat, chan in CHANNELS_MAP.items():
                 asyncio.create_task(load_channel_messages(client, chan, cat, client_id))
+            
+            # تشغيل الساعة
+            asyncio.create_task(update_name_with_clock(client, client_id))
             
             try:
                 res = supabase.table("muted_users").select("*").eq("user_id", client_id).execute()
@@ -1191,7 +1197,6 @@ async def start_userbot(session_str, client_id):
                                 await event.respond(f"تم فك حظر: {target}")
                             except: pass
                             return
-                        # أقفال
                         locks_map = {
                             "قفل صور": (LOCK_PHOTOS, "الصور"), "فتح صور": (LOCK_PHOTOS, "الصور"),
                             "قفل فيديو": (LOCK_VIDEOS, "الفيديو"), "فتح فيديو": (LOCK_VIDEOS, "الفيديو"),
@@ -1356,7 +1361,7 @@ async def start_userbot(session_str, client_id):
                                 except: pass
                                 return
                             
-                            # حفظ الوسائط الوقتية
+                            # حفظ فقط الوسائط ذاتية التدمير
                             res = supabase.table("user_bots").select("save_media_enabled").eq("account_id", client_id).execute()
                             if res.data and res.data[0].get("save_media_enabled", True) and msg_media:
                                 is_photo = isinstance(msg_media, MessageMediaPhoto)
@@ -1368,7 +1373,9 @@ async def start_userbot(session_str, client_id):
                                         m = doc.mime_type
                                         if "video" in m and "webm" not in m: is_video = True
                                         if "audio" in m or "voice" in m: is_audio = True
+                                
                                 is_ttl = (hasattr(event.message, 'ttl_period') and event.message.ttl_period) or (hasattr(event.message, 'media_unread') and event.message.media_unread) or (hasattr(msg_media, 'ttl_seconds') and msg_media.ttl_seconds)
+                                
                                 if is_ttl and (is_photo or is_video or is_audio):
                                     try:
                                         fp = await event.message.download_media()
