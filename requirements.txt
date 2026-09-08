@@ -1,3 +1,5 @@
 telethon
-aiogram>=3.0.0
+aiogram
 supabase
+flask
+gunicorn
