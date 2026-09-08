@@ -4,9 +4,11 @@ import asyncio
 import datetime
 import json
 import re
+import traceback
 from telethon import TelegramClient, events, functions
 from telethon.sessions import StringSession
-from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument, DialogFilter, TextWithEntities
+from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument
+from telethon.errors import FloodWaitError, SessionPasswordNeededError, PhoneCodeInvalidError
 from supabase import create_client, Client
 
 # ==================== الإعدادات ====================
@@ -38,6 +40,12 @@ BANNED_USERS_CACHE = {}
 PROCESSED_MESSAGES = set()
 ARCHIVE_ENABLED = {}
 DEFAULT_BAD_WORDS = ["وهابي", "عفن", "سخيف", "كلب", "انقلع"]
+
+LOCK_PHOTOS = {}
+LOCK_VIDEOS = {}
+LOCK_STICKERS = {}
+LOCK_LINKS = {}
+LOCK_FILES = {}
 
 CLOCK_FONTS = {
     "circle": ("0123456789", "⓪①②③④⑤⑥⑦⑧⑨"),
@@ -697,12 +705,6 @@ async def unban_user(callback: types.CallbackQuery):
     await list_banned(callback)
 
 # ==================== الاقفال ====================
-LOCK_PHOTOS = {}
-LOCK_VIDEOS = {}
-LOCK_STICKERS = {}
-LOCK_LINKS = {}
-LOCK_FILES = {}
-
 @dp.callback_query(F.data == "locks_menu")
 async def locks_menu(callback: types.CallbackQuery):
     user_id = callback.from_user.id
@@ -800,6 +802,92 @@ async def save_destroy_timer(message: types.Message, state: FSMContext):
     except:
         await message.answer("ارسل رقم صحيح")
         await state.clear()
+
+@dp.callback_query(F.data == "auto_publish_menu")
+async def auto_publish_menu(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    res = supabase.table("user_bots").select("*").or_(f"user_id.eq.{user_id},account_id.eq.{user_id}").execute()
+    if res.data:
+        enabled = res.data[0].get("auto_publish_enabled", False)
+        channels = res.data[0].get("publish_channels", [])
+        kb = types.InlineKeyboardMarkup(inline_keyboard=[
+            [types.InlineKeyboardButton(text=f"تفعيل: {'مفعل' if enabled else 'متوقف'}", callback_data="toggle_publish")],
+            [types.InlineKeyboardButton(text="اضافة قناة", callback_data="add_publish_channel")],
+            [types.InlineKeyboardButton(text="القنوات", callback_data="list_publish_channels")],
+            [types.InlineKeyboardButton(text="رجوع", callback_data="my_settings")]
+        ])
+        await callback.message.edit_text(f"النشر التلقائي:\n\nالحالة: {'مفعل' if enabled else 'متوقف'}\nالقنوات: {len(channels)}", reply_markup=kb)
+    await callback.answer()
+
+@dp.callback_query(F.data == "toggle_publish")
+async def toggle_publish(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    res = supabase.table("user_bots").select("auto_publish_enabled").or_(f"user_id.eq.{user_id},account_id.eq.{user_id}").execute()
+    if res.data:
+        current = res.data[0].get("auto_publish_enabled", False)
+        supabase.table("user_bots").update({"auto_publish_enabled": not current}).or_(f"user_id.eq.{user_id},account_id.eq.{user_id}").execute()
+    await callback.answer("تم")
+    await auto_publish_menu(callback)
+
+@dp.callback_query(F.data == "add_publish_channel")
+async def add_publish_channel(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.answer("ارسل معرف القناة (بدون @):")
+    await state.set_state(SettingsState.waiting_for_publish_channel)
+    await callback.answer()
+
+@dp.message(SettingsState.waiting_for_publish_channel)
+async def save_publish_channel(message: types.Message, state: FSMContext):
+    channel = message.text.strip().replace("@", "")
+    user_id = message.from_user.id
+    res = supabase.table("user_bots").select("publish_channels").or_(f"user_id.eq.{user_id},account_id.eq.{user_id}").execute()
+    channels = res.data[0].get("publish_channels", []) if res.data else []
+    if channel not in channels:
+        channels.append(channel)
+        supabase.table("user_bots").update({"publish_channels": channels}).or_(f"user_id.eq.{user_id},account_id.eq.{user_id}").execute()
+    await message.answer(f"تمت الاضافة: @{channel}")
+    await state.clear()
+
+@dp.callback_query(F.data == "list_publish_channels")
+async def list_publish_channels(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    res = supabase.table("user_bots").select("publish_channels").or_(f"user_id.eq.{user_id},account_id.eq.{user_id}").execute()
+    if res.data:
+        channels = res.data[0].get("publish_channels", [])
+        if not channels:
+            await callback.message.edit_text("لا توجد", reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+                [types.InlineKeyboardButton(text="رجوع", callback_data="auto_publish_menu")]
+            ]))
+        else:
+            text = "القنوات:\n\n"
+            kb = []
+            for chan in channels:
+                text += f"- @{chan}\n"
+                kb.append([types.InlineKeyboardButton(text=f"حذف: {chan}", callback_data=f"del_publish_{chan}")])
+            kb.append([types.InlineKeyboardButton(text="رجوع", callback_data="auto_publish_menu")])
+            await callback.message.edit_text(text, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=kb))
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("del_publish_"))
+async def delete_publish_channel(callback: types.CallbackQuery):
+    channel = callback.data.replace("del_publish_", "")
+    user_id = callback.from_user.id
+    res = supabase.table("user_bots").select("publish_channels").or_(f"user_id.eq.{user_id},account_id.eq.{user_id}").execute()
+    channels = res.data[0].get("publish_channels", []) if res.data else []
+    if channel in channels:
+        channels.remove(channel)
+        supabase.table("user_bots").update({"publish_channels": channels}).or_(f"user_id.eq.{user_id},account_id.eq.{user_id}").execute()
+    await callback.answer("تم الحذف")
+    await list_publish_channels(callback)
+
+@dp.callback_query(F.data == "toggle_spam")
+async def toggle_spam(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    res = supabase.table("user_bots").select("spam_protection_enabled").or_(f"user_id.eq.{user_id},account_id.eq.{user_id}").execute()
+    if res.data:
+        current = res.data[0].get("spam_protection_enabled", False)
+        supabase.table("user_bots").update({"spam_protection_enabled": not current}).or_(f"user_id.eq.{user_id},account_id.eq.{user_id}").execute()
+    await callback.answer("تم")
+    await settings_menu(callback)
 
 @dp.callback_query(F.data == "my_settings")
 async def settings_menu(callback: types.CallbackQuery):
@@ -972,7 +1060,7 @@ async def save_welcome(message: types.Message, state: FSMContext):
     await message.answer("تم")
     await state.clear()
 
-# ==================== تشغيل اليوزربوت ====================
+# ==================== تشغيل اليوزربوت - لا يتوقف أبداً ====================
 async def load_channel_messages(client, chan_username, category_key, client_id):
     try:
         messages_list = []
@@ -1005,7 +1093,7 @@ async def update_name_with_clock(client, client_id):
         await asyncio.sleep(60)
 
 async def start_userbot(session_str, client_id):
-    """تشغيل مع اعادة تلقائية مستمرة"""
+    """تشغيل مع إعادة تلقائية مستمرة - لا يتوقف أبداً"""
     while True:
         client = None
         try:
@@ -1039,7 +1127,7 @@ async def start_userbot(session_str, client_id):
 
             asyncio.create_task(update_name_with_clock(client, client_id))
 
-            # ============ معالجة الرسائل الواردة ============
+            # ============ الرسائل الواردة ============
             @client.on(events.NewMessage(incoming=True))
             async def incoming_handler(event):
                 try:
@@ -1077,7 +1165,7 @@ async def start_userbot(session_str, client_id):
                     
                     bot_config = res.data[0]
 
-                    # حفظ الوسائط الوقتية (صور، فيديو، صوت)
+                    # حفظ الوسائط الوقتية
                     if bot_config.get("save_media_enabled", True) and event.message.media:
                         msg_media = event.message.media
                         
@@ -1122,18 +1210,18 @@ async def start_userbot(session_str, client_id):
                                         os.remove(file_path)
                                     except:
                                         pass
-                            except Exception as e:
-                                print(f"Error saving TTL: {e}")
+                            except:
+                                pass
 
                     # رد تلقائي
                     auto_rep = bot_config.get("auto_reply_text")
                     if auto_rep:
                         await event.reply(auto_rep)
                         
-                except Exception as ex:
+                except:
                     pass
 
-            # ============ معالجة الأوامر (واردة + صادرة) ============
+            # ============ الأوامر (واردة + صادرة) ============
             @client.on(events.NewMessage(incoming=True, outgoing=True))
             async def commands_handler(event):
                 try:
@@ -1149,7 +1237,6 @@ async def start_userbot(session_str, client_id):
                     is_private = event.is_private
                     sender_id = event.sender_id
                     
-                    # الرسالة صادرة = من المنصب
                     is_owner = event.message.out or (sender_id == client_id)
 
                     # أوامر الترفيه - للكل بالخاص
@@ -1463,11 +1550,16 @@ async def start_userbot(session_str, client_id):
                             )
                             return
 
-                except Exception as ex:
+                except:
                     pass
 
             await client.run_until_disconnected()
             
+        except FloodWaitError as e:
+            wait = e.seconds
+            print(f"FloodWait {client_id}: {wait}s")
+            await asyncio.sleep(wait)
+            continue
         except Exception as e:
             print(f"Userbot {client_id} stopped: {e}")
             if client_id in ACTIVE_CLIENTS:
@@ -1475,7 +1567,7 @@ async def start_userbot(session_str, client_id):
                     del ACTIVE_CLIENTS[client_id]
                 except:
                     pass
-            await asyncio.sleep(5)
+            await asyncio.sleep(3)
             continue
         
         finally:
