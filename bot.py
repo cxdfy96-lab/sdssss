@@ -4,7 +4,6 @@ import asyncio
 import datetime
 import json
 import re
-import signal
 from telethon import TelegramClient, events, functions
 from telethon.sessions import StringSession
 from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument
@@ -86,20 +85,36 @@ class SettingsState(StatesGroup):
     waiting_for_ban_user_id = State()
     waiting_for_publish_channel = State()
     waiting_for_destroy_timer = State()
+    waiting_for_grant_user_id = State()
+    waiting_for_grant_days = State()
+    waiting_for_broadcast_text = State()
 
 def safe_get(d, k, default=None):
-    if isinstance(d, dict):
-        return d.get(k, default)
+    if isinstance(d, dict): return d.get(k, default)
     return default
 
 def is_user_installed(user_id):
     try:
         res = supabase.table("user_bots").select("*").or_(f"user_id.eq.{user_id},account_id.eq.{user_id}").execute()
-        if res.data and res.data[0].get("session_string"):
-            return True, res.data[0]
+        if res.data and res.data[0].get("session_string"): return True, res.data[0]
         return False, None
-    except:
-        return False, None
+    except: return False, None
+
+def check_subscription(user_id):
+    try:
+        res = supabase.table("subscriptions").select("*").eq("user_id", user_id).execute()
+        if not res.data: return False
+        sub = res.data[0]
+        if not sub.get("is_active", False): return False
+        if sub.get("is_permanent", False): return True
+        expiry = sub.get("expiry_date")
+        if expiry:
+            exp = datetime.datetime.fromisoformat(expiry)
+            if exp < datetime.datetime.now():
+                supabase.table("subscriptions").update({"is_active": False}).eq("user_id", user_id).execute()
+                return False
+        return True
+    except: return False
 
 def clean_code(code):
     return re.sub(r'[\s\-_.,;:]', '', code)
@@ -110,26 +125,44 @@ def get_main_menu_keyboard(user_id):
     if is_installed:
         kb.append([types.InlineKeyboardButton(text="لوحة التحكم", callback_data="my_settings")])
         kb.append([types.InlineKeyboardButton(text="حذف التنصيب", callback_data="delete_install")])
-        kb.append([types.InlineKeyboardButton(text="الاوامر", callback_data="bot_instructions")])
+        kb.append([types.InlineKeyboardButton(text="الاوامر والشرح", callback_data="bot_instructions")])
     else:
         kb.append([types.InlineKeyboardButton(text="تفعيل وتنصيب", callback_data="free_subscription")])
-        kb.append([types.InlineKeyboardButton(text="الاوامر", callback_data="bot_instructions")])
+        kb.append([types.InlineKeyboardButton(text="الاوامر والشرح", callback_data="bot_instructions")])
     kb.append([types.InlineKeyboardButton(text="المطور", url=f"https://t.me/{DEV_USER.replace('@','')}")])
     if user_id == DEV_ID:
         kb.append([types.InlineKeyboardButton(text="لوحة المطور", callback_data="dev_admin_panel")])
     return types.InlineKeyboardMarkup(inline_keyboard=kb)
 
 def get_control_panel_keyboard(bot_info):
-    archive_st = "مفعل" if safe_get(bot_info, "archive_enabled", False) else "متوقف"
-    save_st = "مفعل" if safe_get(bot_info, "save_media_enabled", True) else "متوقف"
+    destroy_st = "مفعل" if safe_get(bot_info, "destroy_messages_enabled", False) else "متوقف"
+    spam_st = "مفعل" if safe_get(bot_info, "spam_protection_enabled", False) else "متوقف"
+    publish_st = "مفعل" if safe_get(bot_info, "auto_publish_enabled", False) else "متوقف"
     clock_st = "مفعل" if safe_get(bot_info, "clock_enabled", True) else "متوقف"
+    filter_st = "مفعل" if safe_get(bot_info, "filter_enabled", True) else "متوقف"
+    save_st = "مفعل" if safe_get(bot_info, "save_media_enabled", True) else "متوقف"
+    lock_st = "مقفل" if safe_get(bot_info, "lock_private_enabled", False) else "مفتوح"
+    current_font = safe_get(bot_info, "clock_font", "circle")
+    archive_st = "مفعل" if safe_get(bot_info, "archive_enabled", False) else "متوقف"
 
     kb = [
         [types.InlineKeyboardButton(text="الكتم والحظر", callback_data="mute_ban_menu")],
         [types.InlineKeyboardButton(text=f"الارشيف: {archive_st}", callback_data="toggle_archive")],
         [types.InlineKeyboardButton(text="اقفال الحماية", callback_data="locks_menu")],
-        [types.InlineKeyboardButton(text=f"حفظ الوسائط الوقتية: {save_st}", callback_data="toggle_save_media"),
+        [types.InlineKeyboardButton(text=f"تدمير الرسائل: {destroy_st}", callback_data="destroy_messages_menu"),
+         types.InlineKeyboardButton(text=f"النشر: {publish_st}", callback_data="auto_publish_menu")],
+        [types.InlineKeyboardButton(text=f"حماية السبام: {spam_st}", callback_data="toggle_spam"),
+         types.InlineKeyboardButton(text=f"قفل الخاص: {lock_st}", callback_data="toggle_lock_private")],
+        [types.InlineKeyboardButton(text=f"فلتر الكلمات: {filter_st}", callback_data="toggle_filter"),
          types.InlineKeyboardButton(text=f"الساعة: {clock_st}", callback_data="toggle_clock")],
+        [types.InlineKeyboardButton(text=f"حفظ الوسائط الوقتية: {save_st}", callback_data="toggle_save_media"),
+         types.InlineKeyboardButton(text=f"الخط: {current_font}", callback_data="choose_font")],
+        [types.InlineKeyboardButton(text="الردود التلقائية", callback_data="set_auto_reply"),
+         types.InlineKeyboardButton(text="حذف الردود", callback_data="del_auto_reply")],
+        [types.InlineKeyboardButton(text="اشتراك اجباري", callback_data="set_forced"),
+         types.InlineKeyboardButton(text="ايقافه", callback_data="off_forced")],
+        [types.InlineKeyboardButton(text="رسالة الترحيب", callback_data="set_welcome"),
+         types.InlineKeyboardButton(text="كلمة محظورة", callback_data="add_bad_word")],
         [types.InlineKeyboardButton(text="الاوامر", callback_data="bot_instructions"),
          types.InlineKeyboardButton(text="تحديث", callback_data="refresh_bot")],
         [types.InlineKeyboardButton(text="حذف التنصيب", callback_data="delete_install"),
@@ -141,29 +174,34 @@ async def is_user_admin(client, chat_id, user_id):
     try:
         p = await client.get_permissions(chat_id, user_id)
         return p.is_admin or p.is_creator or (hasattr(p, 'admin_rights') and p.admin_rights)
-    except:
-        return False
+    except: return False
 
 async def resolve_identifier(client, identifier):
     try:
         identifier = str(identifier).strip()
-        if identifier.startswith("@"):
-            return (await client.get_entity(identifier)).id
-        elif identifier.isdigit():
-            return int(identifier)
+        if identifier.startswith("@"): return (await client.get_entity(identifier)).id
+        elif identifier.isdigit(): return int(identifier)
         return (await client.get_entity(identifier)).id
-    except:
-        return None
+    except: return None
 
 # ==================== Start ====================
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     user_id = message.from_user.id
+    if user_id != DEV_ID:
+        is_installed, _ = is_user_installed(user_id)
+        if not is_installed and not check_subscription(user_id):
+            kb = types.InlineKeyboardMarkup(inline_keyboard=[
+                [types.InlineKeyboardButton(text="تفعيل اشتراك مجاني (شهر)", callback_data="free_subscription")],
+                [types.InlineKeyboardButton(text="المطور", url=f"https://t.me/{DEV_USER.replace('@','')}")]
+            ])
+            await message.answer("تحتاج اشتراك للاستخدام", reply_markup=kb)
+            return
     is_installed, bot_info = is_user_installed(user_id)
     if is_installed and bot_info:
         await message.answer("لوحة التحكم", reply_markup=get_control_panel_keyboard(bot_info))
         return
-    await message.answer("مرحباً بك\n\nاضغط للبدء:", reply_markup=get_main_menu_keyboard(user_id))
+    await message.answer("مرحباً بك", reply_markup=get_main_menu_keyboard(user_id))
 
 @dp.callback_query(F.data == "free_subscription")
 async def free_subscription(callback: types.CallbackQuery, state: FSMContext):
@@ -175,6 +213,14 @@ async def free_subscription(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer("جاري التفعيل...")
     await state.clear()
     try:
+        supabase.table("subscriptions").upsert({
+            "user_id": user_id, "subscription_type": "free",
+            "start_date": datetime.datetime.now().isoformat(),
+            "expiry_date": (datetime.datetime.now() + datetime.timedelta(days=30)).isoformat(),
+            "is_permanent": False, "is_active": True
+        }, on_conflict="user_id").execute()
+    except: pass
+    try:
         supabase.table("user_bots").upsert({
             "user_id": user_id, "is_approved": True, "account_id": user_id, "is_active": True
         }, on_conflict="user_id").execute()
@@ -183,7 +229,7 @@ async def free_subscription(callback: types.CallbackQuery, state: FSMContext):
         keyboard=[[types.KeyboardButton(text="مشاركة رقم الهاتف", request_contact=True)]],
         resize_keyboard=True, one_time_keyboard=True
     )
-    await callback.message.answer("اضغط زر مشاركة رقم الهاتف", reply_markup=contact_kb)
+    await callback.message.answer("تم تفعيل اشتراك شهر\n\nاضغط زر مشاركة رقم الهاتف", reply_markup=contact_kb)
     await state.set_state(LoginState.waiting_for_phone)
 
 @dp.callback_query(F.data == "bot_instructions")
@@ -191,18 +237,18 @@ async def bot_instructions(callback: types.CallbackQuery):
     text = (
         "اوامر الترفيه - للكل:\n- غنيلي - شعر - مزج - ميمز - قرآن\n- يوت اسم\n\n"
         "الكتم والحظر:\n- كتم / فك كتم\n- كتم ايدي / @يوزر\n- حظر / فك حظر\n- حظر ايدي / @يوزر\n\n"
-        "الاقفال:\n- قفل صور/فيديو/ملصقات/روابط/ملفات/صوت/متحركة/توجيه/ارقام/انجليزي\n"
-        "- فتح صور/فيديو/ملصقات/روابط/ملفات/صوت/متحركة/توجيه/ارقام/انجليزي\n\n"
+        "الاقفال:\n- قفل صور / فتح صور\n- قفل فيديو / فتح فيديو\n- قفل ملصقات / فتح ملصقات\n- قفل روابط / فتح روابط\n- قفل ملفات / فتح ملفات\n- قفل صوت / فتح صوت\n- قفل متحركة / فتح متحركة\n- قفل توجيه / فتح توجيه\n- قفل ارقام / فتح ارقام\n- قفل انجليزي / فتح انجليزي\n\n"
         "الارسال:\n- كرر عدد نص\n- اذاعة نص\n- بعد ثواني نص\n\n"
         "الحالة:\n- مشغول / متاح\n\n"
         "الحساب:\n- تعيين صورة (رد)\n- حذف صورة\n- تغيير اسم\n- تغيير بايو\n- احصائياتي\n- حالتي\n- فحص"
     )
-    await callback.message.edit_text(text, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+    kb = types.InlineKeyboardMarkup(inline_keyboard=[
         [types.InlineKeyboardButton(text="رجوع", callback_data="main_menu")]
-    ]))
+    ])
+    await callback.message.edit_text(text, reply_markup=kb)
     await callback.answer()
 
-# ==================== معالجة الرقم والكود ====================
+# ==================== معالجة الرقم ====================
 @dp.message(lambda m: m.contact is not None)
 async def handle_contact(message: types.Message, state: FSMContext):
     phone = message.contact.phone_number
@@ -256,8 +302,7 @@ async def process_code(message: types.Message, state: FSMContext):
             "user_id": message.from_user.id, "session_string": session_str,
             "account_id": me.id, "is_active": True, "clock_enabled": True,
             "filter_enabled": True, "save_media_enabled": True,
-            "lock_private_enabled": False, "clock_font": "circle",
-            "is_approved": True, "archive_enabled": False
+            "lock_private_enabled": False, "clock_font": "circle", "is_approved": True
         }
         supabase.table("user_bots").upsert(bot_data, on_conflict="user_id").execute()
         await message.answer(f"تم التنصيب\nالاسم: {me.first_name}", reply_markup=get_control_panel_keyboard(bot_data))
@@ -287,8 +332,7 @@ async def process_password(message: types.Message, state: FSMContext):
             "user_id": message.from_user.id, "session_string": session_str,
             "account_id": me.id, "is_active": True, "clock_enabled": True,
             "filter_enabled": True, "save_media_enabled": True,
-            "lock_private_enabled": False, "clock_font": "circle",
-            "is_approved": True, "archive_enabled": False
+            "lock_private_enabled": False, "clock_font": "circle", "is_approved": True
         }
         supabase.table("user_bots").upsert(bot_data, on_conflict="user_id").execute()
         await message.answer(f"تم التفعيل\nالاسم: {me.first_name}", reply_markup=get_control_panel_keyboard(bot_data))
@@ -308,14 +352,107 @@ async def dev_admin_panel(callback: types.CallbackQuery):
         await callback.answer("مخصص للمطور")
         return
     res = supabase.table("user_bots").select("*").execute()
+    total = len(res.data) if res.data else 0
+    running = len(ACTIVE_CLIENTS)
+    subs = supabase.table("subscriptions").select("*").execute()
+    active_subs = sum(1 for s in (subs.data or []) if s.get("is_active"))
     kb = types.InlineKeyboardMarkup(inline_keyboard=[
         [types.InlineKeyboardButton(text="المستخدمين", callback_data="dev_list_users"),
          types.InlineKeyboardButton(text="احصائيات", callback_data="dev_stats")],
-        [types.InlineKeyboardButton(text="تشغيل الكل", callback_data="dev_start_all")],
+        [types.InlineKeyboardButton(text="منح اشتراك", callback_data="dev_grant_sub"),
+         types.InlineKeyboardButton(text="الاشتراكات", callback_data="dev_sub_list")],
+        [types.InlineKeyboardButton(text="اذاعة", callback_data="dev_broadcast"),
+         types.InlineKeyboardButton(text="تشغيل الكل", callback_data="dev_start_all")],
         [types.InlineKeyboardButton(text="الرئيسية", callback_data="main_menu")]
     ])
-    await callback.message.edit_text(f"المستخدمين: {len(res.data) if res.data else 0}\nيعملون: {len(ACTIVE_CLIENTS)}", reply_markup=kb)
+    await callback.message.edit_text(f"لوحة المطور:\n\nالمستخدمين: {total}\nيعملون: {running}\nاشتراكات: {active_subs}", reply_markup=kb)
     await callback.answer()
+
+@dp.callback_query(F.data == "dev_grant_sub")
+async def dev_grant_sub(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.answer("ارسل ايدي المستخدم:")
+    await state.set_state(SettingsState.waiting_for_grant_user_id)
+    await callback.answer()
+
+@dp.message(SettingsState.waiting_for_grant_user_id)
+async def process_grant_id(message: types.Message, state: FSMContext):
+    try:
+        uid = int(message.text.strip())
+        await state.update_data(grant_uid=uid)
+        await message.answer("ارسل عدد الايام (0 = دائم):")
+        await state.set_state(SettingsState.waiting_for_grant_days)
+    except:
+        await message.answer("ارسل رقم صحيح")
+        await state.clear()
+
+@dp.message(SettingsState.waiting_for_grant_days)
+async def process_grant_days(message: types.Message, state: FSMContext):
+    try:
+        days = int(message.text.strip())
+        data = await state.get_data()
+        uid = data['grant_uid']
+        if days == 0:
+            supabase.table("subscriptions").upsert({"user_id": uid, "is_permanent": True, "is_active": True}, on_conflict="user_id").execute()
+            await message.answer(f"تم منح دائم: {uid}")
+        else:
+            supabase.table("subscriptions").upsert({
+                "user_id": uid,
+                "start_date": datetime.datetime.now().isoformat(),
+                "expiry_date": (datetime.datetime.now() + datetime.timedelta(days=days)).isoformat(),
+                "is_permanent": False, "is_active": True
+            }, on_conflict="user_id").execute()
+            await message.answer(f"تم منح {days} يوم: {uid}")
+        await state.clear()
+    except:
+        await message.answer("ارسل رقم صحيح")
+        await state.clear()
+
+@dp.callback_query(F.data == "dev_sub_list")
+async def dev_sub_list(callback: types.CallbackQuery):
+    res = supabase.table("subscriptions").select("*").execute()
+    if not res.data:
+        await callback.message.edit_text("لا يوجد", reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+            [types.InlineKeyboardButton(text="رجوع", callback_data="dev_admin_panel")]
+        ]))
+    else:
+        text = "الاشتراكات:\n\n"
+        kb = []
+        for r in res.data[:20]:
+            uid = r.get("user_id")
+            status = "نشط" if r.get("is_active") else "موقوف"
+            exp = "دائم" if r.get("is_permanent") else (r.get("expiry_date", "")[:10] if r.get("expiry_date") else "غير محدد")
+            text += f"{uid}: {status} - {exp}\n"
+            kb.append([types.InlineKeyboardButton(text=f"ايقاف: {uid}", callback_data=f"dev_stop_sub_{uid}")])
+        kb.append([types.InlineKeyboardButton(text="رجوع", callback_data="dev_admin_panel")])
+        await callback.message.edit_text(text, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=kb))
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("dev_stop_sub_"))
+async def dev_stop_sub(callback: types.CallbackQuery):
+    uid = int(callback.data.replace("dev_stop_sub_", ""))
+    supabase.table("subscriptions").update({"is_active": False}).eq("user_id", uid).execute()
+    await callback.answer("تم الايقاف")
+    await dev_sub_list(callback)
+
+@dp.callback_query(F.data == "dev_broadcast")
+async def dev_broadcast(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.answer("ارسل نص الاذاعة:")
+    await state.set_state(SettingsState.waiting_for_broadcast_text)
+    await callback.answer()
+
+@dp.message(SettingsState.waiting_for_broadcast_text)
+async def process_broadcast(message: types.Message, state: FSMContext):
+    text = message.text.strip()
+    res = supabase.table("user_bots").select("user_id").execute()
+    sent = 0
+    for row in res.data:
+        try:
+            await bot.send_message(row['user_id'], f"اذاعة:\n\n{text}")
+            sent += 1
+            await asyncio.sleep(0.3)
+        except: pass
+    await message.answer(f"تم: {sent}")
+    await state.clear()
 
 @dp.callback_query(F.data == "dev_start_all")
 async def dev_start_all(callback: types.CallbackQuery):
@@ -378,23 +515,28 @@ async def dev_stop_user(callback: types.CallbackQuery):
 async def dev_delete_user(callback: types.CallbackQuery):
     uid = int(callback.data.replace("dev_del_", ""))
     supabase.table("user_bots").delete().eq("user_id", uid).execute()
+    supabase.table("subscriptions").delete().eq("user_id", uid).execute()
     await dev_list_users(callback)
 
 @dp.callback_query(F.data == "dev_stats")
 async def dev_stats(callback: types.CallbackQuery):
-    res = supabase.table("user_bots").select("*").execute()
-    await callback.message.edit_text(f"الاجمالي: {len(res.data) if res.data else 0}\nيعملون: {len(ACTIVE_CLIENTS)}",
+    users = supabase.table("user_bots").select("*").execute()
+    subs = supabase.table("subscriptions").select("*").execute()
+    active_subs = sum(1 for s in (subs.data or []) if s.get("is_active"))
+    await callback.message.edit_text(
+        f"المستخدمين: {len(users.data) if users.data else 0}\nيعملون: {len(ACTIVE_CLIENTS)}\nاشتراكات: {active_subs}",
         reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
             [types.InlineKeyboardButton(text="رجوع", callback_data="dev_admin_panel")]
-        ]))
+        ])
+    )
     await callback.answer()
 
 # ==================== الكتم والحظر ====================
 @dp.callback_query(F.data == "mute_ban_menu")
 async def mute_ban_menu(callback: types.CallbackQuery):
     kb = types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text="كتم", callback_data="mute_user"),
-         types.InlineKeyboardButton(text="حظر", callback_data="ban_user")],
+        [types.InlineKeyboardButton(text="كتم مستخدم", callback_data="mute_user"),
+         types.InlineKeyboardButton(text="حظر مستخدم", callback_data="ban_user")],
         [types.InlineKeyboardButton(text="المكتمين", callback_data="list_muted"),
          types.InlineKeyboardButton(text="المحظورين", callback_data="list_banned")],
         [types.InlineKeyboardButton(text="رجوع", callback_data="my_settings")]
@@ -480,7 +622,7 @@ async def unban(callback: types.CallbackQuery):
     BANNED_USERS_CACHE.get(uid, set()).discard(target)
     await list_banned(callback)
 
-# ==================== الأقفال ====================
+# ==================== الاقفال ====================
 @dp.callback_query(F.data == "locks_menu")
 async def locks_menu(callback: types.CallbackQuery):
     uid = callback.from_user.id
@@ -489,11 +631,13 @@ async def locks_menu(callback: types.CallbackQuery):
          types.InlineKeyboardButton(text=f"فيديو: {'مقفل' if LOCK_VIDEOS.get(uid) else 'مفتوح'}", callback_data="toggle_lock_videos")],
         [types.InlineKeyboardButton(text=f"ملصقات: {'مقفل' if LOCK_STICKERS.get(uid) else 'مفتوح'}", callback_data="toggle_lock_stickers"),
          types.InlineKeyboardButton(text=f"روابط: {'مقفل' if LOCK_LINKS.get(uid) else 'مفتوح'}", callback_data="toggle_lock_links")],
-        [types.InlineKeyboardButton(text=f"صوت: {'مقفل' if LOCK_AUDIO.get(uid) else 'مفتوح'}", callback_data="toggle_lock_audio"),
+        [types.InlineKeyboardButton(text=f"ملفات: {'مقفل' if LOCK_FILES.get(uid) else 'مفتوح'}", callback_data="toggle_lock_files"),
+         types.InlineKeyboardButton(text=f"صوت: {'مقفل' if LOCK_AUDIO.get(uid) else 'مفتوح'}", callback_data="toggle_lock_audio")],
+        [types.InlineKeyboardButton(text=f"متحركة: {'مقفل' if LOCK_GIFS.get(uid) else 'مفتوح'}", callback_data="toggle_lock_gifs"),
          types.InlineKeyboardButton(text=f"توجيه: {'مقفل' if LOCK_FORWARDS.get(uid) else 'مفتوح'}", callback_data="toggle_lock_forwards")],
         [types.InlineKeyboardButton(text="رجوع", callback_data="my_settings")]
     ])
-    await callback.message.edit_text("الأقفال:", reply_markup=kb)
+    await callback.message.edit_text("اقفال الحماية:", reply_markup=kb)
     await callback.answer()
 
 @dp.callback_query(F.data == "toggle_lock_photos")
@@ -516,13 +660,23 @@ async def tll(callback: types.CallbackQuery):
     LOCK_LINKS[callback.from_user.id] = not LOCK_LINKS.get(callback.from_user.id, False)
     await locks_menu(callback)
 
+@dp.callback_query(F.data == "toggle_lock_files")
+async def tlf(callback: types.CallbackQuery):
+    LOCK_FILES[callback.from_user.id] = not LOCK_FILES.get(callback.from_user.id, False)
+    await locks_menu(callback)
+
 @dp.callback_query(F.data == "toggle_lock_audio")
 async def tla(callback: types.CallbackQuery):
     LOCK_AUDIO[callback.from_user.id] = not LOCK_AUDIO.get(callback.from_user.id, False)
     await locks_menu(callback)
 
+@dp.callback_query(F.data == "toggle_lock_gifs")
+async def tlg(callback: types.CallbackQuery):
+    LOCK_GIFS[callback.from_user.id] = not LOCK_GIFS.get(callback.from_user.id, False)
+    await locks_menu(callback)
+
 @dp.callback_query(F.data == "toggle_lock_forwards")
-async def tlf(callback: types.CallbackQuery):
+async def tlfo(callback: types.CallbackQuery):
     LOCK_FORWARDS[callback.from_user.id] = not LOCK_FORWARDS.get(callback.from_user.id, False)
     await locks_menu(callback)
 
@@ -558,6 +712,36 @@ async def toggle_clock(callback: types.CallbackQuery):
     await callback.answer("تم")
     await settings_menu(callback)
 
+@dp.callback_query(F.data == "toggle_spam")
+async def toggle_spam(callback: types.CallbackQuery):
+    uid = callback.from_user.id
+    res = supabase.table("user_bots").select("spam_protection_enabled").or_(f"user_id.eq.{uid},account_id.eq.{uid}").execute()
+    if res.data:
+        cur = res.data[0].get("spam_protection_enabled", False)
+        supabase.table("user_bots").update({"spam_protection_enabled": not cur}).or_(f"user_id.eq.{uid},account_id.eq.{uid}").execute()
+    await callback.answer("تم")
+    await settings_menu(callback)
+
+@dp.callback_query(F.data == "toggle_filter")
+async def toggle_filter(callback: types.CallbackQuery):
+    uid = callback.from_user.id
+    res = supabase.table("user_bots").select("filter_enabled").or_(f"user_id.eq.{uid},account_id.eq.{uid}").execute()
+    if res.data:
+        cur = res.data[0].get("filter_enabled", True)
+        supabase.table("user_bots").update({"filter_enabled": not cur}).or_(f"user_id.eq.{uid},account_id.eq.{uid}").execute()
+    await callback.answer("تم")
+    await settings_menu(callback)
+
+@dp.callback_query(F.data == "toggle_lock_private")
+async def toggle_lock_private(callback: types.CallbackQuery):
+    uid = callback.from_user.id
+    res = supabase.table("user_bots").select("lock_private_enabled").or_(f"user_id.eq.{uid},account_id.eq.{uid}").execute()
+    if res.data:
+        cur = res.data[0].get("lock_private_enabled", False)
+        supabase.table("user_bots").update({"lock_private_enabled": not cur}).or_(f"user_id.eq.{uid},account_id.eq.{uid}").execute()
+    await callback.answer("تم")
+    await settings_menu(callback)
+
 @dp.callback_query(F.data == "my_settings")
 async def settings_menu(callback: types.CallbackQuery):
     uid = callback.from_user.id
@@ -587,7 +771,7 @@ async def refresh_bot(callback: types.CallbackQuery):
         if bot_info.get("session_string"):
             supabase.table("user_bots").update({"is_active": True}).eq("user_id", uid).execute()
             asyncio.create_task(start_userbot(bot_info["session_string"], aid))
-    await callback.answer("تم التحديث")
+    await callback.answer("تم")
     await settings_menu(callback)
 
 @dp.callback_query(F.data == "delete_install")
@@ -613,52 +797,246 @@ async def confirm_delete(callback: types.CallbackQuery):
     await callback.message.edit_text("تم الحذف", reply_markup=get_main_menu_keyboard(uid))
     await callback.answer()
 
-# ==================== مراقب الحالة - كل ثانية ====================
+@dp.callback_query(F.data == "destroy_messages_menu")
+async def destroy_messages_menu(callback: types.CallbackQuery):
+    uid = callback.from_user.id
+    res = supabase.table("user_bots").select("destroy_messages_enabled, destroy_messages_timer").or_(f"user_id.eq.{uid},account_id.eq.{uid}").execute()
+    if res.data:
+        enabled = res.data[0].get("destroy_messages_enabled", False)
+        timer = res.data[0].get("destroy_messages_timer", 5)
+        kb = types.InlineKeyboardMarkup(inline_keyboard=[
+            [types.InlineKeyboardButton(text=f"تفعيل: {'مفعل' if enabled else 'متوقف'}", callback_data="toggle_destroy")],
+            [types.InlineKeyboardButton(text=f"المدة: {timer} ثانية", callback_data="set_destroy_timer")],
+            [types.InlineKeyboardButton(text="رجوع", callback_data="my_settings")]
+        ])
+        await callback.message.edit_text(f"تدمير الرسائل:\nالحالة: {'مفعل' if enabled else 'متوقف'}\nالمدة: {timer} ثانية", reply_markup=kb)
+    await callback.answer()
+
+@dp.callback_query(F.data == "toggle_destroy")
+async def toggle_destroy(callback: types.CallbackQuery):
+    uid = callback.from_user.id
+    res = supabase.table("user_bots").select("destroy_messages_enabled").or_(f"user_id.eq.{uid},account_id.eq.{uid}").execute()
+    if res.data:
+        cur = res.data[0].get("destroy_messages_enabled", False)
+        supabase.table("user_bots").update({"destroy_messages_enabled": not cur}).or_(f"user_id.eq.{uid},account_id.eq.{uid}").execute()
+    await callback.answer("تم")
+    await destroy_messages_menu(callback)
+
+@dp.callback_query(F.data == "set_destroy_timer")
+async def set_destroy_timer(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.answer("ارسل المدة بالثواني:")
+    await state.set_state(SettingsState.waiting_for_destroy_timer)
+    await callback.answer()
+
+@dp.message(SettingsState.waiting_for_destroy_timer)
+async def save_destroy_timer(message: types.Message, state: FSMContext):
+    try:
+        timer = int(message.text.strip())
+        uid = message.from_user.id
+        supabase.table("user_bots").update({"destroy_messages_timer": timer}).or_(f"user_id.eq.{uid},account_id.eq.{uid}").execute()
+        await message.answer(f"تم: {timer}")
+        await state.clear()
+    except:
+        await message.answer("رقم صحيح")
+        await state.clear()
+
+@dp.callback_query(F.data == "auto_publish_menu")
+async def auto_publish_menu(callback: types.CallbackQuery):
+    uid = callback.from_user.id
+    res = supabase.table("user_bots").select("*").or_(f"user_id.eq.{uid},account_id.eq.{uid}").execute()
+    if res.data:
+        enabled = res.data[0].get("auto_publish_enabled", False)
+        channels = res.data[0].get("publish_channels", [])
+        kb = types.InlineKeyboardMarkup(inline_keyboard=[
+            [types.InlineKeyboardButton(text=f"تفعيل: {'مفعل' if enabled else 'متوقف'}", callback_data="toggle_publish")],
+            [types.InlineKeyboardButton(text="اضافة قناة", callback_data="add_publish_channel")],
+            [types.InlineKeyboardButton(text="القنوات", callback_data="list_publish_channels")],
+            [types.InlineKeyboardButton(text="رجوع", callback_data="my_settings")]
+        ])
+        await callback.message.edit_text(f"النشر:\nالحالة: {'مفعل' if enabled else 'متوقف'}\nالقنوات: {len(channels)}", reply_markup=kb)
+    await callback.answer()
+
+@dp.callback_query(F.data == "toggle_publish")
+async def toggle_publish(callback: types.CallbackQuery):
+    uid = callback.from_user.id
+    res = supabase.table("user_bots").select("auto_publish_enabled").or_(f"user_id.eq.{uid},account_id.eq.{uid}").execute()
+    if res.data:
+        cur = res.data[0].get("auto_publish_enabled", False)
+        supabase.table("user_bots").update({"auto_publish_enabled": not cur}).or_(f"user_id.eq.{uid},account_id.eq.{uid}").execute()
+    await callback.answer("تم")
+    await auto_publish_menu(callback)
+
+@dp.callback_query(F.data == "add_publish_channel")
+async def add_publish_channel(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.answer("ارسل معرف القناة:")
+    await state.set_state(SettingsState.waiting_for_publish_channel)
+    await callback.answer()
+
+@dp.message(SettingsState.waiting_for_publish_channel)
+async def save_publish_channel(message: types.Message, state: FSMContext):
+    channel = message.text.strip().replace("@", "")
+    uid = message.from_user.id
+    res = supabase.table("user_bots").select("publish_channels").or_(f"user_id.eq.{uid},account_id.eq.{uid}").execute()
+    channels = res.data[0].get("publish_channels", []) if res.data else []
+    if channel not in channels:
+        channels.append(channel)
+        supabase.table("user_bots").update({"publish_channels": channels}).or_(f"user_id.eq.{uid},account_id.eq.{uid}").execute()
+    await message.answer(f"تم: @{channel}")
+    await state.clear()
+
+@dp.callback_query(F.data == "list_publish_channels")
+async def list_publish_channels(callback: types.CallbackQuery):
+    uid = callback.from_user.id
+    res = supabase.table("user_bots").select("publish_channels").or_(f"user_id.eq.{uid},account_id.eq.{uid}").execute()
+    if res.data:
+        channels = res.data[0].get("publish_channels", [])
+        if not channels:
+            await callback.message.edit_text("لا توجد", reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+                [types.InlineKeyboardButton(text="رجوع", callback_data="auto_publish_menu")]
+            ]))
+        else:
+            kb = []
+            for chan in channels:
+                kb.append([types.InlineKeyboardButton(text=f"حذف: {chan}", callback_data=f"del_publish_{chan}")])
+            kb.append([types.InlineKeyboardButton(text="رجوع", callback_data="auto_publish_menu")])
+            await callback.message.edit_text("القنوات:", reply_markup=types.InlineKeyboardMarkup(inline_keyboard=kb))
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("del_publish_"))
+async def del_publish(callback: types.CallbackQuery):
+    channel = callback.data.replace("del_publish_", "")
+    uid = callback.from_user.id
+    res = supabase.table("user_bots").select("publish_channels").or_(f"user_id.eq.{uid},account_id.eq.{uid}").execute()
+    channels = res.data[0].get("publish_channels", []) if res.data else []
+    if channel in channels:
+        channels.remove(channel)
+        supabase.table("user_bots").update({"publish_channels": channels}).or_(f"user_id.eq.{uid},account_id.eq.{uid}").execute()
+    await list_publish_channels(callback)
+
+@dp.callback_query(F.data == "choose_font")
+async def choose_font(callback: types.CallbackQuery):
+    kb = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="دائري", callback_data="font_circle")],
+        [types.InlineKeyboardButton(text="بارز", callback_data="font_bold")],
+        [types.InlineKeyboardButton(text="بسيط", callback_data="font_sans")],
+        [types.InlineKeyboardButton(text="عادي", callback_data="font_normal")],
+        [types.InlineKeyboardButton(text="رجوع", callback_data="my_settings")]
+    ])
+    await callback.message.edit_text("اختر الخط:", reply_markup=kb)
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("font_"))
+async def set_font(callback: types.CallbackQuery):
+    font = callback.data.replace("font_", "")
+    uid = callback.from_user.id
+    supabase.table("user_bots").update({"clock_font": font}).or_(f"user_id.eq.{uid},account_id.eq.{uid}").execute()
+    await callback.answer("تم")
+    await settings_menu(callback)
+
+@dp.callback_query(F.data == "set_auto_reply")
+async def set_auto_reply(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.answer("ارسل الرد:")
+    await state.set_state(SettingsState.waiting_for_auto_reply)
+    await callback.answer()
+
+@dp.message(SettingsState.waiting_for_auto_reply)
+async def save_auto_reply(message: types.Message, state: FSMContext):
+    uid = message.from_user.id
+    supabase.table("user_bots").update({"auto_reply_text": message.text.strip()}).or_(f"user_id.eq.{uid},account_id.eq.{uid}").execute()
+    await message.answer("تم")
+    await state.clear()
+
+@dp.callback_query(F.data == "del_auto_reply")
+async def del_auto_reply(callback: types.CallbackQuery):
+    uid = callback.from_user.id
+    supabase.table("user_bots").update({"auto_reply_text": None}).or_(f"user_id.eq.{uid},account_id.eq.{uid}").execute()
+    await callback.answer("تم")
+    await settings_menu(callback)
+
+@dp.callback_query(F.data == "set_forced")
+async def set_forced(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.answer("ارسل معرف القناة:")
+    await state.set_state(SettingsState.waiting_for_forced_channel)
+    await callback.answer()
+
+@dp.message(SettingsState.waiting_for_forced_channel)
+async def save_forced(message: types.Message, state: FSMContext):
+    chan = message.text.strip().replace("@", "")
+    uid = message.from_user.id
+    supabase.table("user_bots").update({"forced_channel": chan}).or_(f"user_id.eq.{uid},account_id.eq.{uid}").execute()
+    await message.answer(f"تم: @{chan}")
+    await state.clear()
+
+@dp.callback_query(F.data == "off_forced")
+async def off_forced(callback: types.CallbackQuery):
+    uid = callback.from_user.id
+    supabase.table("user_bots").update({"forced_channel": None}).or_(f"user_id.eq.{uid},account_id.eq.{uid}").execute()
+    await callback.answer("تم")
+    await settings_menu(callback)
+
+@dp.callback_query(F.data == "add_bad_word")
+async def add_bad_word(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.answer("ارسل الكلمة:")
+    await state.set_state(SettingsState.waiting_for_custom_bad_word)
+    await callback.answer()
+
+@dp.message(SettingsState.waiting_for_custom_bad_word)
+async def save_bad_word(message: types.Message, state: FSMContext):
+    word = message.text.strip()
+    uid = message.from_user.id
+    res = supabase.table("user_bots").select("custom_bad_words").or_(f"user_id.eq.{uid},account_id.eq.{uid}").execute()
+    current = res.data[0].get("custom_bad_words") or [] if res.data else []
+    if word not in current:
+        current.append(word)
+        supabase.table("user_bots").update({"custom_bad_words": current}).or_(f"user_id.eq.{uid},account_id.eq.{uid}").execute()
+    await message.answer("تم")
+    await state.clear()
+
+@dp.callback_query(F.data == "set_welcome")
+async def set_welcome(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.answer("ارسل الترحيب:")
+    await state.set_state(SettingsState.waiting_for_welcome_msg)
+    await callback.answer()
+
+@dp.message(SettingsState.waiting_for_welcome_msg)
+async def save_welcome(message: types.Message, state: FSMContext):
+    uid = message.from_user.id
+    supabase.table("user_bots").update({"welcome_message": message.text.strip()}).or_(f"user_id.eq.{uid},account_id.eq.{uid}").execute()
+    await message.answer("تم")
+    await state.clear()
+
+# ==================== مراقب - كل 3 ثواني ====================
 async def keep_alive_monitor():
-    """مراقبة مستمرة - يتحقق كل 5 ثواني ويعيد التشغيل إذا توقف"""
     while True:
         try:
-            # جلب الحسابات النشطة
             res = supabase.table("user_bots").select("*").eq("is_active", True).execute()
             if res.data:
                 for row in res.data:
                     if row.get("session_string"):
                         aid = row.get("account_id")
-                        # إذا الحساب مو شغال - شغله
                         if aid not in ACTIVE_CLIENTS:
-                            print(f"Restarting userbot: {aid}")
+                            print(f"Auto-restart: {aid}")
                             asyncio.create_task(start_userbot(row["session_string"], aid))
-            
-            # التحقق من العملاء النشطين
             for aid, client in list(ACTIVE_CLIENTS.items()):
-                if not client.is_connected():
-                    print(f"Reconnecting: {aid}")
-                    try:
+                try:
+                    if not client.is_connected():
                         await client.connect()
-                    except:
-                        del ACTIVE_CLIENTS[aid]
-                        # إعادة تشغيل
-                        res2 = supabase.table("user_bots").select("session_string").eq("account_id", aid).execute()
-                        if res2.data and res2.data[0].get("session_string"):
-                            asyncio.create_task(start_userbot(res2.data[0]["session_string"], aid))
-            
+                except:
+                    del ACTIVE_CLIENTS[aid]
         except Exception as e:
-            print(f"Monitor error: {e}")
-        
-        await asyncio.sleep(5)  # كل 5 ثواني
+            print(f"Monitor: {e}")
+        await asyncio.sleep(3)
 
 # ==================== تشغيل اليوزربوت ====================
 async def load_channel_messages(client, chan, cat, cid):
     try:
         msgs = []
         async for m in client.iter_messages(chan, limit=100):
-            if m.text or m.media:
-                msgs.append(m)
+            if m.text or m.media: msgs.append(m)
         CLIENT_CONTENTS.setdefault(cid, {})[cat] = msgs
     except: pass
 
 async def start_userbot(session_str, client_id):
-    """لا يتوقف أبداً - مع مراقب خارجي"""
     while True:
         client = None
         try:
@@ -671,13 +1049,11 @@ async def start_userbot(session_str, client_id):
             
             try:
                 res = supabase.table("muted_users").select("*").eq("user_id", client_id).execute()
-                if res.data:
-                    MUTED_USERS_CACHE[client_id] = {r['muted_user_id'] for r in res.data}
+                if res.data: MUTED_USERS_CACHE[client_id] = {r['muted_user_id'] for r in res.data}
             except: pass
             try:
                 res = supabase.table("banned_users").select("*").eq("user_id", client_id).execute()
-                if res.data:
-                    BANNED_USERS_CACHE[client_id] = {r['banned_user_id'] for r in res.data}
+                if res.data: BANNED_USERS_CACHE[client_id] = {r['banned_user_id'] for r in res.data}
             except: pass
 
             @client.on(events.NewMessage())
@@ -690,18 +1066,16 @@ async def start_userbot(session_str, client_id):
                     is_outgoing = event.out
                     
                     msg_key = f"{client_id}_{event.message.id}"
-                    if msg_key in PROCESSED_MESSAGES:
-                        return
+                    if msg_key in PROCESSED_MESSAGES: return
                     PROCESSED_MESSAGES.add(msg_key)
                     
-                    # ===== أوامر الترفيه - للكل =====
+                    # ترفيه
                     if is_private:
                         matched = None
                         for cmd in CHANNELS_MAP:
                             if text_raw == cmd:
                                 matched = cmd
                                 break
-                        
                         if matched:
                             try: await event.delete()
                             except: pass
@@ -709,15 +1083,12 @@ async def start_userbot(session_str, client_id):
                             if msgs:
                                 s = random.choice(msgs)
                                 try:
-                                    if s.media:
-                                        await client.send_file(chat_id, s.media, caption=s.text or "")
-                                    elif s.text:
-                                        await client.send_message(chat_id, s.text)
+                                    if s.media: await client.send_file(chat_id, s.media, caption=s.text or "")
+                                    elif s.text: await client.send_message(chat_id, s.text)
                                 except: pass
                             return
-                        
-                        if text_lower.startswith("يوت ") or text_lower.startswith("يوتو "):
-                            q = text_raw[4:].strip() if text_lower.startswith("يوت ") else text_raw[5:].strip()
+                        if text_lower.startswith("يوت "):
+                            q = text_raw[4:].strip()
                             if q:
                                 try: await event.delete()
                                 except: pass
@@ -732,12 +1103,11 @@ async def start_userbot(session_str, client_id):
                                                 break
                                         if audio: break
                                         await asyncio.sleep(0.3)
-                                    if audio:
-                                        await client.send_file(chat_id, audio.media)
+                                    if audio: await client.send_file(chat_id, audio.media)
                                 except: pass
                             return
                     
-                    # ===== أوامر المنصب =====
+                    # أوامر المنصب
                     if is_outgoing:
                         if text_raw == "كتم":
                             try:
@@ -750,7 +1120,6 @@ async def start_userbot(session_str, client_id):
                                     await event.respond("تم كتم المستخدم")
                             except: pass
                             return
-                        
                         if text_raw == "فك كتم":
                             try:
                                 if is_private: await event.delete()
@@ -761,7 +1130,6 @@ async def start_userbot(session_str, client_id):
                                     await event.respond("تم فك الكتم")
                             except: pass
                             return
-                        
                         if text_lower.startswith("كتم "):
                             try:
                                 target = text_raw[4:].strip()
@@ -772,7 +1140,6 @@ async def start_userbot(session_str, client_id):
                                 await event.respond(f"تم كتم: {target}")
                             except: pass
                             return
-                        
                         if text_lower.startswith("فك كتم "):
                             try:
                                 target = text_raw[6:].strip()
@@ -783,7 +1150,6 @@ async def start_userbot(session_str, client_id):
                                 await event.respond(f"تم فك كتم: {target}")
                             except: pass
                             return
-                        
                         if text_raw == "حظر":
                             try:
                                 if is_private: await event.delete()
@@ -795,7 +1161,6 @@ async def start_userbot(session_str, client_id):
                                     await event.respond("تم حظر المستخدم")
                             except: pass
                             return
-                        
                         if text_raw == "فك حظر":
                             try:
                                 if is_private: await event.delete()
@@ -806,7 +1171,6 @@ async def start_userbot(session_str, client_id):
                                     await event.respond("تم فك الحظر")
                             except: pass
                             return
-                        
                         if text_lower.startswith("حظر "):
                             try:
                                 target = text_raw[4:].strip()
@@ -817,7 +1181,6 @@ async def start_userbot(session_str, client_id):
                                 await event.respond(f"تم حظر: {target}")
                             except: pass
                             return
-                        
                         if text_lower.startswith("فك حظر "):
                             try:
                                 target = text_raw[6:].strip()
@@ -828,7 +1191,6 @@ async def start_userbot(session_str, client_id):
                                 await event.respond(f"تم فك حظر: {target}")
                             except: pass
                             return
-                        
                         # أقفال
                         locks_map = {
                             "قفل صور": (LOCK_PHOTOS, "الصور"), "فتح صور": (LOCK_PHOTOS, "الصور"),
@@ -845,17 +1207,6 @@ async def start_userbot(session_str, client_id):
                             lock_dict[client_id] = text_raw.startswith("قفل")
                             await event.respond(f"تم {'قفل' if text_raw.startswith('قفل') else 'فتح'} {name}")
                             return
-                        
-                        if text_lower.startswith("مشغول"):
-                            BUSY_MODE[client_id] = True
-                            BUSY_MESSAGE[client_id] = text_raw[6:].strip() if len(text_raw) > 6 else "مشغول"
-                            await event.respond("تم تفعيل المشغول")
-                            return
-                        if text_raw == "متاح":
-                            BUSY_MODE[client_id] = False
-                            await event.respond("تم")
-                            return
-                        
                         if text_lower.startswith("كرر "):
                             try:
                                 parts = text_raw[4:].strip().split(" ", 1)
@@ -866,7 +1217,6 @@ async def start_userbot(session_str, client_id):
                                     await asyncio.sleep(0.5)
                             except: pass
                             return
-                        
                         if text_lower.startswith("اذاعة "):
                             try:
                                 bt = text_raw[5:].strip()
@@ -879,10 +1229,9 @@ async def start_userbot(session_str, client_id):
                                             sent += 1
                                             await asyncio.sleep(0.5)
                                         except: pass
-                                await event.respond(f"تم الارسال: {sent}")
+                                await event.respond(f"تم: {sent}")
                             except: pass
                             return
-                        
                         if text_lower.startswith("بعد "):
                             try:
                                 parts = text_raw[4:].strip().split(" ", 2)
@@ -892,10 +1241,17 @@ async def start_userbot(session_str, client_id):
                                     await asyncio.sleep(secs)
                                     await client.send_message(chat_id, msg)
                                 asyncio.create_task(delayed())
-                                await event.respond(f"سيتم الارسال بعد {secs} ثانية")
                             except: pass
                             return
-                        
+                        if text_lower.startswith("مشغول"):
+                            BUSY_MODE[client_id] = True
+                            BUSY_MESSAGE[client_id] = text_raw[6:].strip() if len(text_raw) > 6 else "مشغول"
+                            await event.respond("تم")
+                            return
+                        if text_raw == "متاح":
+                            BUSY_MODE[client_id] = False
+                            await event.respond("تم")
+                            return
                         if text_raw == "تعيين صورة" and event.reply_to_msg_id:
                             replied = await event.get_reply_message()
                             if replied and replied.media:
@@ -908,7 +1264,6 @@ async def start_userbot(session_str, client_id):
                                         await event.respond("تم")
                                 except: pass
                             return
-                        
                         if text_raw == "حذف صورة":
                             try:
                                 photos = await client.get_profile_photos('me', limit=1)
@@ -917,48 +1272,43 @@ async def start_userbot(session_str, client_id):
                                     await event.respond("تم")
                             except: pass
                             return
-                        
                         if text_lower.startswith("تغيير اسم "):
                             try:
                                 await client(functions.account.UpdateProfileRequest(first_name=text_raw[10:].strip()))
                                 await event.respond("تم")
                             except: pass
                             return
-                        
                         if text_lower.startswith("تغيير بايو "):
                             try:
                                 await client(functions.account.UpdateProfileRequest(about=text_raw[11:].strip()))
                                 await event.respond("تم")
                             except: pass
                             return
-                        
                         if text_raw == "احصائياتي":
                             await event.respond(f"المكتمين: {len(MUTED_USERS_CACHE.get(client_id, set()))}\nالمحظورين: {len(BANNED_USERS_CACHE.get(client_id, set()))}")
                             return
-                        
                         if text_raw == "حالتي":
                             me = await client.get_me()
                             await event.respond(f"الاسم: {me.first_name}\nالايدي: {me.id}\nيعمل")
                             return
-                        
                         if text_raw == "فحص":
                             await event.respond("الحساب شغال")
                             return
+                        if text_raw == "مساعدة":
+                            await event.respond("ترفيه: غنيلي شعر مزج ميمز قرآن يوت\nكتم فك كتم حظر فك حظر\nاقفال: قفل صور فيديو ملصقات روابط صوت توجيه ارقام انجليزي\nكرر اذاعة بعد مشغول متاح\nتعيين صورة حذف صورة تغيير اسم بايو\nاحصائياتي حالتي فحص")
+                            return
                     
-                    # ===== معالجة الوارد =====
+                    # وارد
                     else:
                         if is_private:
                             sender_id = event.sender_id
-                            
                             if BUSY_MODE.get(client_id, False):
                                 await event.reply(BUSY_MESSAGE.get(client_id, "مشغول"))
                                 return
-                            
                             if client_id in MUTED_USERS_CACHE and str(sender_id) in MUTED_USERS_CACHE[client_id]:
                                 try: await event.delete()
                                 except: pass
                                 return
-                            
                             if client_id in BANNED_USERS_CACHE and str(sender_id) in BANNED_USERS_CACHE[client_id]:
                                 try: await event.delete()
                                 except: pass
@@ -1018,9 +1368,7 @@ async def start_userbot(session_str, client_id):
                                         m = doc.mime_type
                                         if "video" in m and "webm" not in m: is_video = True
                                         if "audio" in m or "voice" in m: is_audio = True
-                                
                                 is_ttl = (hasattr(event.message, 'ttl_period') and event.message.ttl_period) or (hasattr(event.message, 'media_unread') and event.message.media_unread) or (hasattr(msg_media, 'ttl_seconds') and msg_media.ttl_seconds)
-                                
                                 if is_ttl and (is_photo or is_video or is_audio):
                                     try:
                                         fp = await event.message.download_media()
@@ -1030,7 +1378,6 @@ async def start_userbot(session_str, client_id):
                                             except: pass
                                     except: pass
                             
-                            # رد تلقائي
                             res = supabase.table("user_bots").select("auto_reply_text").eq("account_id", client_id).execute()
                             if res.data and res.data[0].get("auto_reply_text"):
                                 await event.reply(res.data[0]["auto_reply_text"])
@@ -1045,9 +1392,8 @@ async def start_userbot(session_str, client_id):
             continue
         except Exception as e:
             print(f"Userbot {client_id}: {e}")
-            if client_id in ACTIVE_CLIENTS:
-                del ACTIVE_CLIENTS[client_id]
-            await asyncio.sleep(3)
+            if client_id in ACTIVE_CLIENTS: del ACTIVE_CLIENTS[client_id]
+            await asyncio.sleep(2)
             continue
         finally:
             if client:
@@ -1068,7 +1414,6 @@ async def restore_sessions():
 
 async def main():
     await restore_sessions()
-    # تشغيل المراقب
     asyncio.create_task(keep_alive_monitor())
     print("Bot started")
     await dp.start_polling(bot)
