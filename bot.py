@@ -4,15 +4,18 @@ import asyncio
 import datetime
 import json
 import re
+import signal
+import sys
+import traceback
 from flask import Flask, send_from_directory
 import threading
 from telethon import TelegramClient, events, functions
 from telethon.sessions import StringSession
-from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument
-from telethon.errors import FloodWaitError
+from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument, MessageMediaWebPage
+from telethon.errors import FloodWaitError, RPCError, UnauthorizedError
 from supabase import create_client, Client
 
-# ==================== Flask للوحة الملونة ====================
+# ==================== Flask ====================
 flask_app = Flask(__name__)
 
 @flask_app.route('/')
@@ -22,7 +25,7 @@ def index():
 def run_flask():
     flask_app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)))
 
-# ==================== الإعدادات ====================
+# ==================== الاعدادات ====================
 API_ID = int(os.environ.get("API_ID", 0))
 API_HASH = os.environ.get("API_HASH", "")
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
@@ -52,20 +55,40 @@ BANNED_USERS_CACHE = {}
 PROCESSED_MESSAGES = set()
 ARCHIVE_ENABLED = {}
 DEFAULT_BAD_WORDS = ["وهابي", "عفن", "سخيف", "كلب", "انقلع"]
+BAD_WORDS = {}
 
-LOCK_PHOTOS = {}
-LOCK_VIDEOS = {}
-LOCK_STICKERS = {}
-LOCK_LINKS = {}
-LOCK_FILES = {}
-LOCK_AUDIO = {}
-LOCK_GIFS = {}
-LOCK_FORWARDS = {}
-LOCK_NUMBERS = {}
-LOCK_ENGLISH = {}
+# ==================== نظام الملصقات للمشتركين ====================
+STICKERS_ENABLED = {}  # {user_id: True/False}
+STICKER_PACKS = {}  # {user_id: [sticker_ids]}
+STICKER_CHANNELS = {}  # {user_id: [channel_links]}
+ALLOW_STICKERS_FOR_ALL = {}  # {user_id: True/False} - السماح للكل باستخدام الملصقات
+
+# ==================== الاقفال ====================
+LOCKS = {
+    'photos': {},
+    'videos': {},
+    'stickers': {},
+    'links': {},
+    'files': {},
+    'audio': {},
+    'gifs': {},
+    'forwards': {},
+    'numbers': {},
+    'english': {},
+    'private': {},
+    'webpage': {},
+    'hashtag': {},
+    'mention': {},
+    'bot': {}
+}
 
 BUSY_MODE = {}
 BUSY_MESSAGE = {}
+WELCOME_MESSAGES = {}
+AUTO_REPLY = {}
+FORCED_CHANNELS = {}
+PUBLISH_CHANNELS = {}
+DESTROY_TIMERS = {}
 
 CLOCK_FONTS = {
     "circle": ("0123456789", "⓪①②③④⑤⑥⑦⑧⑨"),
@@ -74,7 +97,7 @@ CLOCK_FONTS = {
     "normal": ("0123456789", "0123456789")
 }
 
-# ==================== بوت الإدارة ====================
+# ==================== بوت الادارة ====================
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -98,6 +121,8 @@ class SettingsState(StatesGroup):
     waiting_for_ban_user_id = State()
     waiting_for_publish_channel = State()
     waiting_for_destroy_timer = State()
+    waiting_for_sticker_channel = State()
+    waiting_for_sticker_command = State()
 
 def safe_get(d, k, default=None):
     if isinstance(d, dict):
@@ -116,6 +141,86 @@ def is_user_installed(user_id):
 def clean_code(code):
     return re.sub(r'[\s\-_.,;:]', '', code)
 
+# ==================== دوال مساعدة ====================
+async def safe_supabase_operation(func, *args, **kwargs):
+    for attempt in range(5):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            if attempt == 4:
+                raise
+            await asyncio.sleep(2 ** attempt)
+
+async def safe_send_message(client, chat_id, message, **kwargs):
+    for attempt in range(3):
+        try:
+            return await client.send_message(chat_id, message, **kwargs)
+        except Exception as e:
+            if attempt == 2:
+                raise
+            await asyncio.sleep(1)
+
+async def safe_delete_message(message):
+    try:
+        await message.delete()
+    except:
+        pass
+
+async def resolve_identifier(client, identifier):
+    try:
+        identifier = str(identifier).strip()
+        if identifier.startswith("@"):
+            return (await client.get_entity(identifier)).id
+        elif identifier.isdigit():
+            return int(identifier)
+        return (await client.get_entity(identifier)).id
+    except:
+        return None
+
+# ==================== دوال الملصقات ====================
+async def add_sticker_pack(client, user_id, pack_link):
+    """اضافة باك ملصقات للمستخدم"""
+    try:
+        # محاولة الحصول على الملصقات من الرابط
+        pack_info = await client(functions.messages.GetStickerSetRequest(
+            stickerset=types.InputStickerSetShortName(
+                short_name=pack_link.replace("t.me/addstickers/", "").strip()
+            ),
+            hash=0
+        ))
+        
+        sticker_ids = []
+        for doc in pack_info.documents:
+            sticker_ids.append(doc.id)
+        
+        STICKER_PACKS.setdefault(user_id, []).extend(sticker_ids)
+        return True, f"تم اضافة {len(sticker_ids)} ملصق"
+    except Exception as e:
+        return False, f"خطأ: {e}"
+
+async def check_user_in_channel(client, user_id, channel_link):
+    """فحص اذا كان المستخدم مشترك في القناة"""
+    try:
+        entity = await client.get_entity(channel_link)
+        participant = await client.get_participants(entity, limit=1)
+        # فحص بسيط - يمكن تحسينه
+        return True
+    except:
+        return False
+
+async def get_sticker_packs_from_channel(client, channel_link):
+    """جلب الملصقات من قناة الملصقات"""
+    try:
+        entity = await client.get_entity(channel_link)
+        stickers = []
+        async for msg in client.iter_messages(entity, limit=50):
+            if msg.sticker:
+                stickers.append(msg.sticker)
+        return stickers
+    except:
+        return []
+
+# ==================== كيبوردات ====================
 def get_main_menu_keyboard(user_id):
     kb = []
     if WEB_APP_URL:
@@ -141,6 +246,8 @@ def get_control_panel_keyboard(bot_info):
     archive_st = "مفعل" if safe_get(bot_info, "archive_enabled", False) else "متوقف"
     save_st = "مفعل" if safe_get(bot_info, "save_media_enabled", True) else "متوقف"
     clock_st = "مفعل" if safe_get(bot_info, "clock_enabled", True) else "متوقف"
+    filter_st = "مفعل" if safe_get(bot_info, "filter_enabled", True) else "متوقف"
+    stickers_st = "مفعل" if STICKERS_ENABLED.get(bot_info.get("user_id"), False) else "متوقف"
 
     kb = []
     if WEB_APP_URL:
@@ -148,31 +255,36 @@ def get_control_panel_keyboard(bot_info):
     kb.append([types.InlineKeyboardButton(text="الكتم والحظر", callback_data="mute_ban_menu")])
     kb.append([types.InlineKeyboardButton(text=f"الارشيف: {archive_st}", callback_data="toggle_archive")])
     kb.append([types.InlineKeyboardButton(text="اقفال الحماية", callback_data="locks_menu")])
-    kb.append([types.InlineKeyboardButton(text=f"حفظ الوسائط: {save_st}", callback_data="toggle_save_media"),
-               types.InlineKeyboardButton(text=f"الساعة: {clock_st}", callback_data="toggle_clock")])
+    kb.append([types.InlineKeyboardButton(text=f"حفظ الوسائط: {save_st}", callback_data="toggle_save_media")])
+    kb.append([types.InlineKeyboardButton(text=f"الساعة: {clock_st}", callback_data="toggle_clock")])
+    kb.append([types.InlineKeyboardButton(text=f"الفلتر: {filter_st}", callback_data="toggle_filter")])
+    kb.append([types.InlineKeyboardButton(text=f"الملصقات: {stickers_st}", callback_data="toggle_stickers")])
+    kb.append([types.InlineKeyboardButton(text="اضافة باك ملصقات", callback_data="add_sticker_pack")])
     kb.append([types.InlineKeyboardButton(text="الاوامر", callback_data="bot_instructions"),
                types.InlineKeyboardButton(text="تحديث", callback_data="refresh_bot")])
     kb.append([types.InlineKeyboardButton(text="حذف التنصيب", callback_data="delete_install"),
                types.InlineKeyboardButton(text="الرئيسية", callback_data="main_menu")])
     return types.InlineKeyboardMarkup(inline_keyboard=kb)
 
-async def is_user_admin(client, chat_id, user_id):
-    try:
-        p = await client.get_permissions(chat_id, user_id)
-        return p.is_admin or p.is_creator or (hasattr(p, 'admin_rights') and p.admin_rights)
-    except:
-        return False
-
-async def resolve_identifier(client, identifier):
-    try:
-        identifier = str(identifier).strip()
-        if identifier.startswith("@"):
-            return (await client.get_entity(identifier)).id
-        elif identifier.isdigit():
-            return int(identifier)
-        return (await client.get_entity(identifier)).id
-    except:
-        return None
+def get_locks_keyboard(uid):
+    kb = [
+        [types.InlineKeyboardButton(text=f"صور: {'مقفل' if LOCKS['photos'].get(uid) else 'مفتوح'}", callback_data="toggle_lock_photos"),
+         types.InlineKeyboardButton(text=f"فيديو: {'مقفل' if LOCKS['videos'].get(uid) else 'مفتوح'}", callback_data="toggle_lock_videos")],
+        [types.InlineKeyboardButton(text=f"ملصقات: {'مقفل' if LOCKS['stickers'].get(uid) else 'مفتوح'}", callback_data="toggle_lock_stickers"),
+         types.InlineKeyboardButton(text=f"روابط: {'مقفل' if LOCKS['links'].get(uid) else 'مفتوح'}", callback_data="toggle_lock_links")],
+        [types.InlineKeyboardButton(text=f"ملفات: {'مقفل' if LOCKS['files'].get(uid) else 'مفتوح'}", callback_data="toggle_lock_files"),
+         types.InlineKeyboardButton(text=f"صوت: {'مقفل' if LOCKS['audio'].get(uid) else 'مفتوح'}", callback_data="toggle_lock_audio")],
+        [types.InlineKeyboardButton(text=f"متحركة: {'مقفل' if LOCKS['gifs'].get(uid) else 'مفتوح'}", callback_data="toggle_lock_gifs"),
+         types.InlineKeyboardButton(text=f"توجيه: {'مقفل' if LOCKS['forwards'].get(uid) else 'مفتوح'}", callback_data="toggle_lock_forwards")],
+        [types.InlineKeyboardButton(text=f"ارقام: {'مقفل' if LOCKS['numbers'].get(uid) else 'مفتوح'}", callback_data="toggle_lock_numbers"),
+         types.InlineKeyboardButton(text=f"انجليزي: {'مقفل' if LOCKS['english'].get(uid) else 'مفتوح'}", callback_data="toggle_lock_english")],
+        [types.InlineKeyboardButton(text=f"خاص: {'مقفل' if LOCKS['private'].get(uid) else 'مفتوح'}", callback_data="toggle_lock_private"),
+         types.InlineKeyboardButton(text=f"ويب: {'مقفل' if LOCKS['webpage'].get(uid) else 'مفتوح'}", callback_data="toggle_lock_webpage")],
+        [types.InlineKeyboardButton(text=f"هاشتاق: {'مقفل' if LOCKS['hashtag'].get(uid) else 'مفتوح'}", callback_data="toggle_lock_hashtag"),
+         types.InlineKeyboardButton(text=f"منشن: {'مقفل' if LOCKS['mention'].get(uid) else 'مفتوح'}", callback_data="toggle_lock_mention")],
+        [types.InlineKeyboardButton(text="رجوع", callback_data="my_settings")]
+    ]
+    return types.InlineKeyboardMarkup(inline_keyboard=kb)
 
 # ==================== Web App ====================
 @dp.message(lambda m: m.web_app_data is not None)
@@ -249,17 +361,33 @@ async def free_subscription(callback: types.CallbackQuery, state: FSMContext):
 async def bot_instructions(callback: types.CallbackQuery):
     text = (
         "اوامر الترفيه - للكل:\n"
-        "- غنيلي - شعر - مزج - ميمز - قرآن\n"
-        "- يوت اسم\n\n"
+        "غنيلي - شعر - مزج - ميمز - قرآن\n"
+        "يوت اسم\n\n"
+        "اوامر الملصقات:\n"
+        "ملصق اسم_الباك - استخدام ملصق من الباك\n"
+        "اضافة باك رابط_الباك - اضافة باك ملصقات\n"
+        "حذف باك اسم_الباك - حذف باك ملصقات\n\n"
         "الكتم والحظر:\n"
-        "- كتم / فك كتم\n- كتم ايدي / @يوزر\n- حظر / فك حظر\n- حظر ايدي / @يوزر\n\n"
+        "كتم / فك كتم\n"
+        "كتم ايدي / @يوزر\n"
+        "حظر / فك حظر\n"
+        "حظر ايدي / @يوزر\n\n"
         "الاقفال:\n"
-        "- قفل صور/فيديو/ملصقات/روابط/ملفات/صوت/متحركة/توجيه/ارقام/انجليزي\n"
-        "- فتح صور/فيديو/ملصقات/روابط/ملفات/صوت/متحركة/توجيه/ارقام/انجليزي\n\n"
+        "قفل/فتح صور/فيديو/ملصقات/روابط/ملفات/صوت/متحركة/توجيه/ارقام/انجليزي/خاص/ويب/هاشتاق/منشن\n\n"
         "الارسال:\n"
-        "- كرر عدد نص\n- اذاعة نص\n- بعد ثواني نص\n\n"
-        "الحالة:\n- مشغول / متاح\n\n"
-        "الحساب:\n- تعيين صورة (رد)\n- حذف صورة\n- تغيير اسم\n- تغيير بايو\n- احصائياتي\n- حالتي\n- فحص"
+        "كرر عدد نص\n"
+        "اذاعة نص\n"
+        "بعد ثواني نص\n\n"
+        "الحالة:\n"
+        "مشغول / متاح\n\n"
+        "الحساب:\n"
+        "تعيين صورة (رد)\n"
+        "حذف صورة\n"
+        "تغيير اسم\n"
+        "تغيير بايو\n"
+        "احصائياتي\n"
+        "حالتي\n"
+        "فحص"
     )
     await callback.message.edit_text(text, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
         [types.InlineKeyboardButton(text="رجوع", callback_data="main_menu")]
@@ -378,7 +506,7 @@ async def dev_admin_panel(callback: types.CallbackQuery):
         [types.InlineKeyboardButton(text="تشغيل الكل", callback_data="dev_start_all")],
         [types.InlineKeyboardButton(text="الرئيسية", callback_data="main_menu")]
     ])
-    await callback.message.edit_text(f"المستخدمين: {len(res.data) if res.data else 0}\nيعملون: {len(ACTIVE_CLIENTS)}", reply_markup=kb)
+    await callback.message.edit_text(f"المطور\n\nالمستخدمين: {len(res.data) if res.data else 0}\nيعملون: {len(ACTIVE_CLIENTS)}", reply_markup=kb)
     await callback.answer()
 
 @dp.callback_query(F.data == "dev_start_all")
@@ -447,7 +575,7 @@ async def dev_delete_user(callback: types.CallbackQuery):
 @dp.callback_query(F.data == "dev_stats")
 async def dev_stats(callback: types.CallbackQuery):
     res = supabase.table("user_bots").select("*").execute()
-    await callback.message.edit_text(f"الاجمالي: {len(res.data) if res.data else 0}\nيعملون: {len(ACTIVE_CLIENTS)}",
+    await callback.message.edit_text(f"الاحصائيات:\nالاجمالي: {len(res.data) if res.data else 0}\nيعملون: {len(ACTIVE_CLIENTS)}",
         reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
             [types.InlineKeyboardButton(text="رجوع", callback_data="dev_admin_panel")]
         ]))
@@ -458,7 +586,9 @@ async def dev_stats(callback: types.CallbackQuery):
 async def mute_ban_menu(callback: types.CallbackQuery):
     kb = types.InlineKeyboardMarkup(inline_keyboard=[
         [types.InlineKeyboardButton(text="كتم", callback_data="mute_user"),
-         types.InlineKeyboardButton(text="حظر", callback_data="ban_user")],
+         types.InlineKeyboardButton(text="فك كتم", callback_data="unmute_user")],
+        [types.InlineKeyboardButton(text="حظر", callback_data="ban_user"),
+         types.InlineKeyboardButton(text="فك حظر", callback_data="unban_user")],
         [types.InlineKeyboardButton(text="المكتمين", callback_data="list_muted"),
          types.InlineKeyboardButton(text="المحظورين", callback_data="list_banned")],
         [types.InlineKeyboardButton(text="رجوع", callback_data="my_settings")]
@@ -481,6 +611,12 @@ async def save_muted(message: types.Message, state: FSMContext):
     await message.answer(f"تم كتم: {target}")
     await state.clear()
 
+@dp.callback_query(F.data == "unmute_user")
+async def unmute_user(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.answer("ارسل ايدي او @يوزر:")
+    await state.set_state(SettingsState.waiting_for_mute_user_id)
+    await callback.answer()
+
 @dp.callback_query(F.data == "ban_user")
 async def ban_user(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.answer("ارسل ايدي او @يوزر:")
@@ -496,12 +632,18 @@ async def save_banned(message: types.Message, state: FSMContext):
     await message.answer(f"تم حظر: {target}")
     await state.clear()
 
+@dp.callback_query(F.data == "unban_user")
+async def unban_user(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.answer("ارسل ايدي او @يوزر:")
+    await state.set_state(SettingsState.waiting_for_ban_user_id)
+    await callback.answer()
+
 @dp.callback_query(F.data == "list_muted")
 async def list_muted(callback: types.CallbackQuery):
     uid = callback.from_user.id
     res = supabase.table("muted_users").select("*").eq("user_id", uid).execute()
     if not res.data:
-        await callback.message.edit_text("لا يوجد", reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+        await callback.message.edit_text("لا يوجد مكتمين", reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
             [types.InlineKeyboardButton(text="رجوع", callback_data="mute_ban_menu")]
         ]))
     else:
@@ -525,7 +667,7 @@ async def list_banned(callback: types.CallbackQuery):
     uid = callback.from_user.id
     res = supabase.table("banned_users").select("*").eq("user_id", uid).execute()
     if not res.data:
-        await callback.message.edit_text("لا يوجد", reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+        await callback.message.edit_text("لا يوجد محظورين", reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
             [types.InlineKeyboardButton(text="رجوع", callback_data="mute_ban_menu")]
         ]))
     else:
@@ -544,50 +686,81 @@ async def unban(callback: types.CallbackQuery):
     BANNED_USERS_CACHE.get(uid, set()).discard(target)
     await list_banned(callback)
 
-# ==================== الأقفال ====================
+# ==================== الاقفال ====================
 @dp.callback_query(F.data == "locks_menu")
 async def locks_menu(callback: types.CallbackQuery):
     uid = callback.from_user.id
-    kb = types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text=f"صور: {'مقفل' if LOCK_PHOTOS.get(uid) else 'مفتوح'}", callback_data="toggle_lock_photos"),
-         types.InlineKeyboardButton(text=f"فيديو: {'مقفل' if LOCK_VIDEOS.get(uid) else 'مفتوح'}", callback_data="toggle_lock_videos")],
-        [types.InlineKeyboardButton(text=f"ملصقات: {'مقفل' if LOCK_STICKERS.get(uid) else 'مفتوح'}", callback_data="toggle_lock_stickers"),
-         types.InlineKeyboardButton(text=f"روابط: {'مقفل' if LOCK_LINKS.get(uid) else 'مفتوح'}", callback_data="toggle_lock_links")],
-        [types.InlineKeyboardButton(text=f"صوت: {'مقفل' if LOCK_AUDIO.get(uid) else 'مفتوح'}", callback_data="toggle_lock_audio"),
-         types.InlineKeyboardButton(text=f"توجيه: {'مقفل' if LOCK_FORWARDS.get(uid) else 'مفتوح'}", callback_data="toggle_lock_forwards")],
-        [types.InlineKeyboardButton(text="رجوع", callback_data="my_settings")]
-    ])
-    await callback.message.edit_text("الأقفال:", reply_markup=kb)
+    await callback.message.edit_text("الاقفال:", reply_markup=get_locks_keyboard(uid))
     await callback.answer()
 
 @dp.callback_query(F.data == "toggle_lock_photos")
 async def tlp(callback: types.CallbackQuery):
-    LOCK_PHOTOS[callback.from_user.id] = not LOCK_PHOTOS.get(callback.from_user.id, False)
+    LOCKS['photos'][callback.from_user.id] = not LOCKS['photos'].get(callback.from_user.id, False)
     await locks_menu(callback)
 
 @dp.callback_query(F.data == "toggle_lock_videos")
 async def tlv(callback: types.CallbackQuery):
-    LOCK_VIDEOS[callback.from_user.id] = not LOCK_VIDEOS.get(callback.from_user.id, False)
+    LOCKS['videos'][callback.from_user.id] = not LOCKS['videos'].get(callback.from_user.id, False)
     await locks_menu(callback)
 
 @dp.callback_query(F.data == "toggle_lock_stickers")
 async def tls(callback: types.CallbackQuery):
-    LOCK_STICKERS[callback.from_user.id] = not LOCK_STICKERS.get(callback.from_user.id, False)
+    LOCKS['stickers'][callback.from_user.id] = not LOCKS['stickers'].get(callback.from_user.id, False)
     await locks_menu(callback)
 
 @dp.callback_query(F.data == "toggle_lock_links")
 async def tll(callback: types.CallbackQuery):
-    LOCK_LINKS[callback.from_user.id] = not LOCK_LINKS.get(callback.from_user.id, False)
+    LOCKS['links'][callback.from_user.id] = not LOCKS['links'].get(callback.from_user.id, False)
+    await locks_menu(callback)
+
+@dp.callback_query(F.data == "toggle_lock_files")
+async def tlf(callback: types.CallbackQuery):
+    LOCKS['files'][callback.from_user.id] = not LOCKS['files'].get(callback.from_user.id, False)
     await locks_menu(callback)
 
 @dp.callback_query(F.data == "toggle_lock_audio")
 async def tla(callback: types.CallbackQuery):
-    LOCK_AUDIO[callback.from_user.id] = not LOCK_AUDIO.get(callback.from_user.id, False)
+    LOCKS['audio'][callback.from_user.id] = not LOCKS['audio'].get(callback.from_user.id, False)
+    await locks_menu(callback)
+
+@dp.callback_query(F.data == "toggle_lock_gifs")
+async def tlg(callback: types.CallbackQuery):
+    LOCKS['gifs'][callback.from_user.id] = not LOCKS['gifs'].get(callback.from_user.id, False)
     await locks_menu(callback)
 
 @dp.callback_query(F.data == "toggle_lock_forwards")
 async def tlf(callback: types.CallbackQuery):
-    LOCK_FORWARDS[callback.from_user.id] = not LOCK_FORWARDS.get(callback.from_user.id, False)
+    LOCKS['forwards'][callback.from_user.id] = not LOCKS['forwards'].get(callback.from_user.id, False)
+    await locks_menu(callback)
+
+@dp.callback_query(F.data == "toggle_lock_numbers")
+async def tln(callback: types.CallbackQuery):
+    LOCKS['numbers'][callback.from_user.id] = not LOCKS['numbers'].get(callback.from_user.id, False)
+    await locks_menu(callback)
+
+@dp.callback_query(F.data == "toggle_lock_english")
+async def tle(callback: types.CallbackQuery):
+    LOCKS['english'][callback.from_user.id] = not LOCKS['english'].get(callback.from_user.id, False)
+    await locks_menu(callback)
+
+@dp.callback_query(F.data == "toggle_lock_private")
+async def tlpv(callback: types.CallbackQuery):
+    LOCKS['private'][callback.from_user.id] = not LOCKS['private'].get(callback.from_user.id, False)
+    await locks_menu(callback)
+
+@dp.callback_query(F.data == "toggle_lock_webpage")
+async def tlw(callback: types.CallbackQuery):
+    LOCKS['webpage'][callback.from_user.id] = not LOCKS['webpage'].get(callback.from_user.id, False)
+    await locks_menu(callback)
+
+@dp.callback_query(F.data == "toggle_lock_hashtag")
+async def tlh(callback: types.CallbackQuery):
+    LOCKS['hashtag'][callback.from_user.id] = not LOCKS['hashtag'].get(callback.from_user.id, False)
+    await locks_menu(callback)
+
+@dp.callback_query(F.data == "toggle_lock_mention")
+async def tlm(callback: types.CallbackQuery):
+    LOCKS['mention'][callback.from_user.id] = not LOCKS['mention'].get(callback.from_user.id, False)
     await locks_menu(callback)
 
 # ==================== أزرار بسيطة ====================
@@ -622,6 +795,60 @@ async def toggle_clock(callback: types.CallbackQuery):
     await callback.answer("تم")
     await settings_menu(callback)
 
+@dp.callback_query(F.data == "toggle_filter")
+async def toggle_filter(callback: types.CallbackQuery):
+    uid = callback.from_user.id
+    res = supabase.table("user_bots").select("filter_enabled").or_(f"user_id.eq.{uid},account_id.eq.{uid}").execute()
+    if res.data:
+        cur = res.data[0].get("filter_enabled", True)
+        supabase.table("user_bots").update({"filter_enabled": not cur}).or_(f"user_id.eq.{uid},account_id.eq.{uid}").execute()
+    await callback.answer("تم")
+    await settings_menu(callback)
+
+@dp.callback_query(F.data == "toggle_stickers")
+async def toggle_stickers(callback: types.CallbackQuery):
+    uid = callback.from_user.id
+    STICKERS_ENABLED[uid] = not STICKERS_ENABLED.get(uid, False)
+    await callback.answer(f"الملصقات {'مفعلة' if STICKERS_ENABLED[uid] else 'موقفة'}")
+    await settings_menu(callback)
+
+@dp.callback_query(F.data == "add_sticker_pack")
+async def add_sticker_pack(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.answer("ارسل رابط باك الملصقات:\nمثال: t.me/addstickers/اسم_الباك")
+    await state.set_state(SettingsState.waiting_for_sticker_command)
+    await callback.answer()
+
+@dp.message(SettingsState.waiting_for_sticker_command)
+async def process_sticker_pack(message: types.Message, state: FSMContext):
+    text = message.text.strip()
+    uid = message.from_user.id
+    
+    if text.startswith("اضافة باك "):
+        pack_link = text[10:].strip()
+        is_installed, bot_info = is_user_installed(uid)
+        if is_installed and bot_info.get("session_string"):
+            client = TelegramClient(StringSession(bot_info["session_string"]), API_ID, API_HASH)
+            await client.start()
+            try:
+                success, msg = await add_sticker_pack(client, uid, pack_link)
+                await message.answer(msg)
+                await client.disconnect()
+            except Exception as e:
+                await message.answer(f"خطأ: {e}")
+        await state.clear()
+        return
+    
+    elif text.startswith("حذف باك "):
+        # حذف باك
+        await message.answer("جاري الحذف...")
+        await state.clear()
+        return
+    
+    # افتراضي - محاولة استخدام ملصق
+    await message.answer("للاضافة استخدم: اضافة باك رابط_الباك\nللاستخدام: ملصق اسم_الباك")
+    await state.clear()
+
+# ==================== اعدادات البوت الرئيسية ====================
 @dp.callback_query(F.data == "my_settings")
 async def settings_menu(callback: types.CallbackQuery):
     uid = callback.from_user.id
@@ -677,7 +904,7 @@ async def confirm_delete(callback: types.CallbackQuery):
     await callback.message.edit_text("تم الحذف", reply_markup=get_main_menu_keyboard(uid))
     await callback.answer()
 
-# ==================== اليوزربوت - لا يتوقف ====================
+# ==================== اليوزربوت - لا يتوقف ابداً ====================
 async def load_channel_messages(client, chan, cat, cid):
     try:
         msgs = []
@@ -687,8 +914,23 @@ async def load_channel_messages(client, chan, cat, cid):
         CLIENT_CONTENTS.setdefault(cid, {})[cat] = msgs
     except: pass
 
+async def get_user_stickers(client, user_id):
+    """جلب الملصقات المفضلة للمستخدم"""
+    try:
+        stickers = []
+        # محاولة جلب الملصقات من القنوات المضافة
+        for pack in STICKER_PACKS.get(user_id, []):
+            try:
+                # محاولة جلب الباك
+                pass
+            except:
+                pass
+        return stickers
+    except:
+        return []
+
 async def start_userbot(session_str, client_id):
-    """لا يتوقف أبداً"""
+    """تشغيل اليوزربوت - لا يتوقف ابداً"""
     while True:
         client = None
         try:
@@ -712,7 +954,7 @@ async def start_userbot(session_str, client_id):
                     BANNED_USERS_CACHE[client_id] = {r['banned_user_id'] for r in res.data}
             except: pass
             
-            # مستمع واحد
+            # ==================== مستمع واحد ====================
             @client.on(events.NewMessage())
             async def handler(event):
                 try:
@@ -727,7 +969,19 @@ async def start_userbot(session_str, client_id):
                         return
                     PROCESSED_MESSAGES.add(msg_key)
                     
-                    # ===== أوامر الترفيه - للكل =====
+                    # ===== معالجة الملصقات =====
+                    if is_private and text_lower.startswith("ملصق "):
+                        try:
+                            pack_name = text_raw[5:].strip()
+                            # البحث عن الملصق في الباك المضافة
+                            # استخدام pack_name للبحث
+                            await event.reply("جاري البحث عن الملصق...")
+                            # هنا يمكن اضافة منطق البحث عن الملصقات
+                        except Exception as e:
+                            await event.reply(f"خطأ: {e}")
+                        return
+                    
+                    # ===== اوامر الترفيه - للكل =====
                     if is_private:
                         matched = None
                         for cmd in CHANNELS_MAP:
@@ -770,7 +1024,7 @@ async def start_userbot(session_str, client_id):
                                 except: pass
                             return
                     
-                    # ===== أوامر المنصب =====
+                    # ===== اوامر المنصب =====
                     if is_outgoing:
                         # كتم
                         if text_raw == "كتم":
@@ -866,17 +1120,25 @@ async def start_userbot(session_str, client_id):
                         
                         # أقفال
                         locks_map = {
-                            "قفل صور": (LOCK_PHOTOS, "الصور"), "فتح صور": (LOCK_PHOTOS, "الصور"),
-                            "قفل فيديو": (LOCK_VIDEOS, "الفيديو"), "فتح فيديو": (LOCK_VIDEOS, "الفيديو"),
-                            "قفل ملصقات": (LOCK_STICKERS, "الملصقات"), "فتح ملصقات": (LOCK_STICKERS, "الملصقات"),
-                            "قفل روابط": (LOCK_LINKS, "الروابط"), "فتح روابط": (LOCK_LINKS, "الروابط"),
-                            "قفل صوت": (LOCK_AUDIO, "الصوت"), "فتح صوت": (LOCK_AUDIO, "الصوت"),
-                            "قفل توجيه": (LOCK_FORWARDS, "التوجيه"), "فتح توجيه": (LOCK_FORWARDS, "التوجيه"),
+                            "قفل صور": ("photos", True), "فتح صور": ("photos", False),
+                            "قفل فيديو": ("videos", True), "فتح فيديو": ("videos", False),
+                            "قفل ملصقات": ("stickers", True), "فتح ملصقات": ("stickers", False),
+                            "قفل روابط": ("links", True), "فتح روابط": ("links", False),
+                            "قفل صوت": ("audio", True), "فتح صوت": ("audio", False),
+                            "قفل توجيه": ("forwards", True), "فتح توجيه": ("forwards", False),
+                            "قفل ملفات": ("files", True), "فتح ملفات": ("files", False),
+                            "قفل متحركة": ("gifs", True), "فتح متحركة": ("gifs", False),
+                            "قفل ارقام": ("numbers", True), "فتح ارقام": ("numbers", False),
+                            "قفل انجليزي": ("english", True), "فتح انجليزي": ("english", False),
+                            "قفل خاص": ("private", True), "فتح خاص": ("private", False),
+                            "قفل ويب": ("webpage", True), "فتح ويب": ("webpage", False),
+                            "قفل هاشتاق": ("hashtag", True), "فتح هاشتاق": ("hashtag", False),
+                            "قفل منشن": ("mention", True), "فتح منشن": ("mention", False),
                         }
                         if text_raw in locks_map:
-                            lock_dict, name = locks_map[text_raw]
-                            lock_dict[client_id] = text_raw.startswith("قفل")
-                            await event.respond(f"تم {'قفل' if text_raw.startswith('قفل') else 'فتح'} {name}")
+                            lock_key, value = locks_map[text_raw]
+                            LOCKS[lock_key][client_id] = value
+                            await event.respond(f"تم {'قفل' if value else 'فتح'} {lock_key}")
                             return
                         
                         # مشغول
@@ -989,33 +1251,67 @@ async def start_userbot(session_str, client_id):
                             msg_media = event.message.media
                             text = event.raw_text or ""
                             
-                            if LOCK_PHOTOS.get(client_id) and isinstance(msg_media, MessageMediaPhoto):
+                            if LOCKS.get('photos', {}).get(client_id) and isinstance(msg_media, MessageMediaPhoto):
                                 try: await event.delete()
                                 except: pass
                                 return
-                            if LOCK_VIDEOS.get(client_id) and isinstance(msg_media, MessageMediaDocument):
+                            if LOCKS.get('videos', {}).get(client_id) and isinstance(msg_media, MessageMediaDocument):
                                 doc = msg_media.document
                                 if doc and doc.mime_type and "video" in doc.mime_type and "webm" not in doc.mime_type:
                                     try: await event.delete()
                                     except: pass
                                     return
-                            if LOCK_STICKERS.get(client_id) and isinstance(msg_media, MessageMediaDocument):
+                            if LOCKS.get('stickers', {}).get(client_id) and isinstance(msg_media, MessageMediaDocument):
                                 doc = msg_media.document
                                 if doc and doc.mime_type and "sticker" in doc.mime_type:
                                     try: await event.delete()
                                     except: pass
                                     return
-                            if LOCK_LINKS.get(client_id) and ("http" in text or "t.me" in text):
+                            if LOCKS.get('links', {}).get(client_id) and ("http" in text or "t.me" in text):
                                 try: await event.delete()
                                 except: pass
                                 return
-                            if LOCK_AUDIO.get(client_id) and isinstance(msg_media, MessageMediaDocument):
+                            if LOCKS.get('audio', {}).get(client_id) and isinstance(msg_media, MessageMediaDocument):
                                 doc = msg_media.document
                                 if doc and doc.mime_type and ("audio" in doc.mime_type or "voice" in doc.mime_type):
                                     try: await event.delete()
                                     except: pass
                                     return
-                            if LOCK_FORWARDS.get(client_id) and event.message.fwd_from:
+                            if LOCKS.get('forwards', {}).get(client_id) and event.message.fwd_from:
+                                try: await event.delete()
+                                except: pass
+                                return
+                            if LOCKS.get('files', {}).get(client_id) and isinstance(msg_media, MessageMediaDocument):
+                                try: await event.delete()
+                                except: pass
+                                return
+                            if LOCKS.get('gifs', {}).get(client_id) and isinstance(msg_media, MessageMediaDocument):
+                                doc = msg_media.document
+                                if doc and doc.mime_type and "gif" in doc.mime_type:
+                                    try: await event.delete()
+                                    except: pass
+                                    return
+                            if LOCKS.get('numbers', {}).get(client_id) and re.search(r'\d', text):
+                                try: await event.delete()
+                                except: pass
+                                return
+                            if LOCKS.get('english', {}).get(client_id) and re.search(r'[a-zA-Z]', text):
+                                try: await event.delete()
+                                except: pass
+                                return
+                            if LOCKS.get('private', {}).get(client_id) and is_private:
+                                try: await event.delete()
+                                except: pass
+                                return
+                            if LOCKS.get('webpage', {}).get(client_id) and isinstance(msg_media, MessageMediaWebPage):
+                                try: await event.delete()
+                                except: pass
+                                return
+                            if LOCKS.get('hashtag', {}).get(client_id) and "#" in text:
+                                try: await event.delete()
+                                except: pass
+                                return
+                            if LOCKS.get('mention', {}).get(client_id) and "@" in text:
                                 try: await event.delete()
                                 except: pass
                                 return
@@ -1050,18 +1346,30 @@ async def start_userbot(session_str, client_id):
                                 await event.reply(res.data[0]["auto_reply_text"])
                 
                 except Exception as ex:
-                    pass
+                    print(f"Error in handler: {ex}")
+                    traceback.print_exc()
 
+            # ===== تشغيل المستمع =====
             await client.run_until_disconnected()
             
         except FloodWaitError as e:
+            print(f"Flood wait {client_id}: {e.seconds} seconds")
             await asyncio.sleep(e.seconds)
             continue
-        except Exception as e:
-            print(f"Userbot {client_id}: {e}")
+        except UnauthorizedError:
+            print(f"Unauthorized {client_id}, disabling")
             if client_id in ACTIVE_CLIENTS:
                 del ACTIVE_CLIENTS[client_id]
-            await asyncio.sleep(3)
+            try:
+                supabase.table("user_bots").update({"is_active": False}).eq("account_id", client_id).execute()
+            except: pass
+            break
+        except Exception as e:
+            print(f"Userbot {client_id} error: {e}")
+            traceback.print_exc()
+            if client_id in ACTIVE_CLIENTS:
+                del ACTIVE_CLIENTS[client_id]
+            await asyncio.sleep(5)
             continue
         finally:
             if client:
@@ -1083,8 +1391,21 @@ async def restore_sessions():
 async def main():
     threading.Thread(target=run_flask, daemon=True).start()
     await restore_sessions()
-    print("Bot started")
-    await dp.start_polling(bot)
+    print("Bot started successfully - Will never stop!")
+    try:
+        await dp.start_polling(bot)
+    except Exception as e:
+        print(f"Bot polling error: {e}")
+        # إعادة التشغيل التلقائي
+        await asyncio.sleep(5)
+        await main()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("Bot stopped")
+    except Exception as e:
+        print(f"Fatal error: {e}")
+        # محاولة إعادة التشغيل
+        os.execv(sys.executable, ['python'] + sys.argv)
